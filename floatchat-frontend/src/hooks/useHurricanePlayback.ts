@@ -17,20 +17,46 @@ interface Storm {
   track: TrackPoint[];
 }
 
-const STEP_MS = 6 * 60 * 60 * 1000; // 6 hours per tick
+const STEP_MS = 6 * 60 * 60 * 1000;
+
+// ✅ FEATURE 2: Saffir-Simpson Category Helper
+const getStormCategory = (wind: number): string => {
+  if (wind >= 137) return 'Cat 5';
+  if (wind >= 113) return 'Cat 4';
+  if (wind >= 96) return 'Cat 3';
+  if (wind >= 83) return 'Cat 2';
+  if (wind >= 64) return 'Cat 1';
+  if (wind >= 34) return 'TS';
+  return 'TD';
+};
+
+// ✅ FEATURE 2: Category colors for UI
+const getCategoryColor = (category: string): string => {
+  switch (category) {
+    case 'Cat 5': return 'text-purple-400';
+    case 'Cat 4': return 'text-red-500';
+    case 'Cat 3': return 'text-red-400';
+    case 'Cat 2': return 'text-orange-500';
+    case 'Cat 1': return 'text-yellow-500';
+    case 'TS': return 'text-yellow-300';
+    case 'TD': return 'text-blue-300';
+    default: return 'text-gray-400';
+  }
+};
 
 export function useHurricanePlayback() {
   const [allData, setAllData] = useState<Record<string, Storm[]> | null>(null);
   const [selectedYear, setSelectedYear] = useState(2005);
   const [currentDate, setCurrentDate] = useState(new Date(2005, 5, 1));
   const [isPlaying, setIsPlaying] = useState(false);
-  
-  // ✅ NEW: Speed State (Interval in ms). Lower = Faster.
-  const [playbackSpeed, setPlaybackSpeed] = useState(100); 
+  const [playbackSpeed, setPlaybackSpeed] = useState(100);
+
+  // ✅ FEATURE 1: State for the currently focused storm
+  const [focusedStormId, setFocusedStormId] = useState<string | null>(null);
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-  /* ---------------- LOAD DATA ---------------- */
+  /* LOAD DATA */
   useEffect(() => {
     fetch('/hurricanes.json')
       .then(res => res.json())
@@ -38,59 +64,47 @@ export function useHurricanePlayback() {
       .catch(console.error);
   }, []);
 
-  /* ---------------- PLAYBACK LOOP ---------------- */
+  /* PLAYBACK LOOP */
   useEffect(() => {
-    // Clear existing timer if speed or playing state changes
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-
+    if (timerRef.current) clearInterval(timerRef.current);
     if (!isPlaying) return;
 
-    // Start new timer with the selected speed
     timerRef.current = setInterval(() => {
       setCurrentDate(prev => {
         const next = new Date(prev.getTime() + STEP_MS);
-
         if (next.getFullYear() > selectedYear) {
           setIsPlaying(false);
           return prev;
         }
         return next;
       });
-    }, playbackSpeed); // ✅ Uses dynamic speed
+    }, playbackSpeed);
 
     return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
+      if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [isPlaying, selectedYear, playbackSpeed]); // ✅ Re-run when speed changes
+  }, [isPlaying, selectedYear, playbackSpeed]);
 
-  /* ---------------- RESET ON YEAR CHANGE ---------------- */
+  /* RESET ON YEAR CHANGE */
   useEffect(() => {
     setCurrentDate(new Date(selectedYear, 5, 1));
     setIsPlaying(false);
+    setFocusedStormId(null); // Reset focus when year changes
   }, [selectedYear]);
 
-  /* ---------------- DERIVED DATA ---------------- */
+  /* AVAILABLE YEARS */
   const availableYears = useMemo(() => {
     if (!allData) return [];
     return Object.keys(allData).map(Number).sort((a, b) => b - a);
   }, [allData]);
 
+  /* ACTIVE STORMS */
   const activeStorms = useMemo(() => {
     if (!allData || !allData[selectedYear]) return [];
     const t = currentDate.getTime();
 
     return allData[selectedYear].flatMap(storm => {
       const track = storm.track;
-      if (!track.length) return [];
-
-      // Optimize: Only check storms active in this year
-      // Find the segment for the current time
       for (let i = 0; i < track.length - 1; i++) {
         const p1 = track[i];
         const p2 = track[i + 1];
@@ -100,6 +114,7 @@ export function useHurricanePlayback() {
         if (t >= t1 && t <= t2) {
           const progress = (t - t1) / (t2 - t1);
           const wind = Math.round(p1.wind + (p2.wind - p1.wind) * progress);
+          const category = getStormCategory(wind);
 
           let color = '#3b82f6';
           if (wind >= 34) color = '#f59e0b';
@@ -109,12 +124,14 @@ export function useHurricanePlayback() {
           return [{
             id: storm.id,
             name: storm.name,
+            year: storm.year,
             lat: p1.lat + (p2.lat - p1.lat) * progress,
             lng: p1.lng + (p2.lng - p1.lng) * progress,
             wind,
+            category,
             radius: wind * 0.4,
             color,
-            fullTrack: storm.track,
+            fullTrack: storm.track
           }];
         }
       }
@@ -122,6 +139,7 @@ export function useHurricanePlayback() {
     });
   }, [allData, selectedYear, currentDate]);
 
+  /* SEASON STATS */
   const seasonStats = useMemo(() => {
     if (!allData || !allData[selectedYear]) return null;
     let maxWind = 0;
@@ -154,6 +172,54 @@ export function useHurricanePlayback() {
     };
   }, [allData, selectedYear]);
 
+  /* ✅ FEATURE 2: FOCUSED STORM STATS */
+  const focusedStormStats = useMemo(() => {
+    if (!focusedStormId || !activeStorms.length) return null;
+    
+    const focusedStorm = activeStorms.find(storm => storm.id === focusedStormId);
+    if (!focusedStorm) return null;
+
+    // Get the original storm data to calculate peak stats
+    const originalStorm = allData?.[selectedYear]?.find(storm => storm.id === focusedStormId);
+    
+    if (!originalStorm) return null;
+
+    // Calculate peak wind from full track history
+    let peakWind = 0;
+    originalStorm.track.forEach(point => {
+      if (point.wind > peakWind) {
+        peakWind = point.wind;
+      }
+    });
+
+    // Determine status
+    const currentWind = focusedStorm.wind || 0;
+    const status = currentWind > 0 ? 'ACTIVE' : 'DISSIPATED';
+    
+    // Calculate days active (rough estimate based on track length)
+    const daysActive = originalStorm.track.length > 0 
+      ? Math.ceil(originalStorm.track.length / 4) 
+      : 0;
+
+    return {
+      id: focusedStorm.id,
+      name: focusedStorm.name,
+      year: focusedStorm.year || selectedYear,
+      currentWind,
+      currentCategory: getStormCategory(currentWind),
+      categoryColor: getCategoryColor(getStormCategory(currentWind)),
+      peakWind,
+      peakCategory: getStormCategory(peakWind),
+      peakCategoryColor: getCategoryColor(getStormCategory(peakWind)),
+      status,
+      daysActive,
+      trackPoints: originalStorm.track.length,
+      // For visual indicators
+      isActive: currentWind > 0,
+      intensityChange: currentWind >= peakWind ? 'Peaking' : 'Weakening',
+    };
+  }, [focusedStormId, activeStorms, allData, selectedYear]);
+
   return {
     activeStorms,
     currentDate,
@@ -163,7 +229,13 @@ export function useHurricanePlayback() {
     setIsPlaying,
     availableYears,
     seasonStats,
-    playbackSpeed,    // ✅ Expose speed
-    setPlaybackSpeed, // ✅ Expose setter
+    playbackSpeed,
+    setPlaybackSpeed,
+    focusedStormId,
+    setFocusedStormId,
+    // ✅ FEATURE 2: Export focused storm stats
+    focusedStormStats,
+    // ✅ FEATURE 2: Export helper function if needed elsewhere
+    getStormCategory,
   };
 }

@@ -8,6 +8,9 @@ interface TacticalGlobeProps {
   activeScenario: any | null;
   activeStorms?: any[];
   onUpdateAnalysis?: (count: number) => void;
+  // ✅ FEATURE 1: Add new props to interface
+  focusedStormId?: string | null;
+  onStormSelect?: (id: string) => void;
 }
 
 const TacticalGlobe = dynamic<TacticalGlobeProps>(() => import('@/components/TacticalGlobe'), { 
@@ -36,8 +39,13 @@ export default function WarRoomPage() {
     setIsPlaying,
     availableYears,
     seasonStats,
-    playbackSpeed,    // ✅ Get Speed State
-    setPlaybackSpeed  // ✅ Get Speed Setter
+    playbackSpeed,
+    setPlaybackSpeed,
+    // ✅ FEATURE 1: Consume new state
+    focusedStormId,
+    setFocusedStormId,
+    // ✅ FEATURE 2: Consume focused storm stats
+    focusedStormStats,
   } = useHurricanePlayback();
 
   const estimatedCost = (affectedCount * 1.2).toFixed(1);
@@ -94,7 +102,7 @@ export default function WarRoomPage() {
                  {isPlaying ? '⏸ PAUSE' : '▶ PLAY SEASON'}
                </button>
 
-               {/* ✅ SPEED CONTROLS */}
+               {/* SPEED CONTROLS */}
                <div className="flex items-center justify-between border-t border-white/10 pt-3">
                   <span className="text-gray-500 text-[10px] font-bold">SPEED</span>
                   <div className="flex gap-1">
@@ -142,7 +150,14 @@ export default function WarRoomPage() {
       <div className="flex-1 h-full relative bg-gradient-to-b from-slate-900 to-black">
         <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 pointer-events-none"></div>
         <div className="absolute inset-0 z-0">
-          <TacticalGlobe activeScenario={mode === 'SIMULATION' ? activeScenario : null} activeStorms={mode === 'HISTORICAL' ? activeStorms : []} onUpdateAnalysis={setAffectedCount} />
+          <TacticalGlobe 
+            activeScenario={mode === 'SIMULATION' ? activeScenario : null} 
+            activeStorms={mode === 'HISTORICAL' ? activeStorms : []} 
+            onUpdateAnalysis={setAffectedCount}
+            // ✅ FEATURE 1: Pass Props
+            focusedStormId={focusedStormId}
+            onStormSelect={setFocusedStormId} 
+          />
         </div>
         {mode === 'HISTORICAL' && (
            <div className="absolute bottom-10 left-1/2 -translate-x-1/2 w-1/2 z-20">
@@ -152,13 +167,117 @@ export default function WarRoomPage() {
       </div>
 
       {/* 3. RIGHT PANEL */}
-      <div className="w-80 h-full bg-black/40 backdrop-blur-xl border-l border-white/10 pt-24 px-6 relative z-10">
-        <h2 className="text-blue-400 text-xs font-bold tracking-[0.2em] mb-6">IMPACT FORECAST</h2>
-        <div className="flex flex-col gap-6">
-          <MetricCard label="Vessels at Risk" value={affectedCount.toString()} color={affectedCount > 0 ? "text-red-500" : "text-white"} />
-          <MetricCard label="Est. Fleet Delay" value={`+${estimatedDelay}h`} color={affectedCount > 0 ? "text-red-500" : "text-gray-500"} />
-          <MetricCard label="Est. Cost Surge" value={`$${estimatedCost}M`} color={affectedCount > 0 ? "text-red-500" : "text-gray-500"} />
-        </div>
+      <div className="w-80 h-full bg-black/40 backdrop-blur-xl border-l border-white/10 pt-24 px-6 relative z-10 overflow-y-auto">
+        
+        {/* ✅ FEATURE 2: STORM INTELLIGENCE CARD */}
+        {focusedStormStats && mode === 'HISTORICAL' ? (
+          <div className="space-y-6 mb-6">
+            <h2 className="text-blue-400 text-xs font-bold tracking-[0.2em] mb-2">STORM INTELLIGENCE</h2>
+            
+            <div className="bg-slate-900/90 border border-blue-500/50 rounded-xl p-4 space-y-4">
+              {/* Storm Name and Year */}
+              <div className="mb-2">
+                <div className="text-gray-400 text-xs uppercase tracking-widest">Cyclone Identity</div>
+                <div className="flex items-baseline justify-between">
+                  <div className="text-2xl font-bold text-white truncate mr-2">{focusedStormStats.name}</div>
+                  <div className="text-gray-400 font-mono text-sm">{focusedStormStats.year}</div>
+                </div>
+              </div>
+
+              {/* Status Indicator */}
+              <div className="flex items-center justify-between mb-2">
+                <div className={`px-2 py-1 rounded text-[10px] font-bold uppercase ${focusedStormStats.isActive ? 'bg-red-500/20 text-red-400' : 'bg-gray-700/50 text-gray-400'}`}>
+                  {focusedStormStats.status}
+                </div>
+                <div className="text-gray-500 text-xs font-mono">
+                  {focusedStormStats.trackPoints} pts
+                </div>
+              </div>
+
+              {/* Current Intensity */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-black/40 rounded-lg p-3 border border-white/5">
+                  <div className="text-gray-500 text-[10px] uppercase mb-1">Current Intensity</div>
+                  <div className="flex items-baseline">
+                    <span className="text-xl font-mono font-bold text-white mr-2">{focusedStormStats.currentWind}</span>
+                    <span className="text-xs text-gray-400">kt</span>
+                  </div>
+                  <div className={`text-sm font-bold ${focusedStormStats.categoryColor}`}>
+                    {focusedStormStats.currentCategory}
+                  </div>
+                </div>
+
+                {/* Peak Intensity */}
+                <div className="bg-black/40 rounded-lg p-3 border border-white/5">
+                  <div className="text-gray-500 text-[10px] uppercase mb-1">Peak Intensity</div>
+                  <div className="flex items-baseline">
+                    <span className="text-xl font-mono font-bold text-white mr-2">{focusedStormStats.peakWind}</span>
+                    <span className="text-xs text-gray-400">kt</span>
+                  </div>
+                  <div className={`text-sm font-bold ${focusedStormStats.peakCategoryColor}`}>
+                    {focusedStormStats.peakCategory}
+                  </div>
+                </div>
+              </div>
+
+              {/* Additional Stats */}
+              <div className="grid grid-cols-3 gap-2 pt-2">
+                <div className="text-center">
+                  <div className="text-gray-500 text-[10px] uppercase">Days</div>
+                  <div className="text-white font-mono font-bold">{focusedStormStats.daysActive}</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-gray-500 text-[10px] uppercase">Phase</div>
+                  <div className={`text-sm font-bold ${focusedStormStats.intensityChange === 'Peaking' ? 'text-red-400' : 'text-yellow-400'}`}>
+                    {focusedStormStats.intensityChange}
+                  </div>
+                </div>
+                <div className="text-center">
+                  <div className="text-gray-500 text-[10px] uppercase">Focused</div>
+                  <div className="text-blue-400 text-sm font-bold">✓</div>
+                </div>
+              </div>
+
+              {/* Close Button */}
+              <button 
+                onClick={() => setFocusedStormId(null)}
+                className="w-full mt-4 py-2 bg-black/50 border border-white/10 rounded text-xs text-gray-400 hover:text-white hover:border-white/20 transition-colors"
+              >
+                Clear Focus
+              </button>
+            </div>
+
+            {/* Impact Forecast (Below Storm Card) */}
+            <div>
+              <h2 className="text-blue-400 text-xs font-bold tracking-[0.2em] mb-4">IMPACT FORECAST</h2>
+              <div className="space-y-4">
+                <MetricCard label="Vessels at Risk" value={affectedCount.toString()} color={affectedCount > 0 ? "text-red-500" : "text-white"} />
+                <MetricCard label="Est. Fleet Delay" value={`+${estimatedDelay}h`} color={affectedCount > 0 ? "text-red-500" : "text-gray-500"} />
+                <MetricCard label="Est. Cost Surge" value={`$${estimatedCost}M`} color={affectedCount > 0 ? "text-red-500" : "text-gray-500"} />
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* DEFAULT VIEW: Impact Forecast Only */
+          <div>
+            <h2 className="text-blue-400 text-xs font-bold tracking-[0.2em] mb-6">IMPACT FORECAST</h2>
+            <div className="space-y-6">
+              <MetricCard label="Vessels at Risk" value={affectedCount.toString()} color={affectedCount > 0 ? "text-red-500" : "text-white"} />
+              <MetricCard label="Est. Fleet Delay" value={`+${estimatedDelay}h`} color={affectedCount > 0 ? "text-red-500" : "text-gray-500"} />
+              <MetricCard label="Est. Cost Surge" value={`$${estimatedCost}M`} color={affectedCount > 0 ? "text-red-500" : "text-gray-500"} />
+              
+              {/* Focus Hint */}
+              {mode === 'HISTORICAL' && (
+                <div className="p-4 bg-slate-900/50 border border-white/5 rounded-lg mt-6">
+                  <div className="text-gray-500 text-[10px] uppercase mb-2">FOCUS INSTRUCTIONS</div>
+                  <p className="text-gray-400 text-xs leading-relaxed">
+                    Click on any hurricane ring or label to focus the camera and view detailed storm intelligence.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

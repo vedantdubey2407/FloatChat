@@ -4,6 +4,9 @@ import { useEffect, useRef, useState, useMemo } from 'react';
 import Globe from 'react-globe.gl';
 import type { GlobeMethods } from 'react-globe.gl';
 
+// 1. Fix: Cast Globe to 'any' to allow onRingClick/onLabelClick props
+const InteractiveGlobe = Globe as any;
+
 /* --------------------------------------------------
    PROPS
 -------------------------------------------------- */
@@ -12,6 +15,9 @@ export interface TacticalGlobeProps {
   activeScenario: any | null;
   activeStorms?: any[];
   onUpdateAnalysis?: (count: number) => void;
+  // ✅ FEATURE 1: Selection Props
+  focusedStormId?: string | null;
+  onStormSelect?: (id: string) => void;
 }
 
 /* --------------------------------------------------
@@ -22,12 +28,13 @@ export default function TacticalGlobe({
   activeScenario,
   activeStorms = [],
   onUpdateAnalysis,
+  focusedStormId,
+  onStormSelect,
 }: TacticalGlobeProps) {
 
   const globeEl = useRef<GlobeMethods | undefined>(undefined);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Ref to track the last camera target to prevent jittering updates
   const lastCameraTarget = useRef<{
     lat: number;
     lng: number;
@@ -71,7 +78,7 @@ export default function TacticalGlobe({
   }, []);
 
   /* --------------------------------------------------
-     3. CAMERA DIRECTOR (SMOOTH TRACKING)
+     3. CAMERA DIRECTOR (FEATURE 1 LOGIC)
   -------------------------------------------------- */
 
   useEffect(() => {
@@ -80,63 +87,65 @@ export default function TacticalGlobe({
     // A. Hypothetical scenario (Static focus)
     if (activeScenario) {
       globeEl.current.pointOfView(
-        {
-          lat: activeScenario.lat,
-          lng: activeScenario.lng,
-          altitude: 1.8,
-        },
+        { lat: activeScenario.lat, lng: activeScenario.lng, altitude: 1.8 },
         1200
       );
-
       lastCameraTarget.current = {
-        lat: activeScenario.lat,
-        lng: activeScenario.lng,
-        id: activeScenario.id,
+        lat: activeScenario.lat, lng: activeScenario.lng, id: activeScenario.id,
       };
       return;
     }
 
-    // B. Historical mode → follow strongest storm intelligently
+    // B. Historical mode
     if (activeStorms.length > 0) {
-      // Sort to find the most intense storm to track
-      const focusStorm = [...activeStorms].sort(
-        (a, b) => (b.wind ?? 0) - (a.wind ?? 0)
-      )[0];
+      let targetStorm = activeStorms[0]; 
 
-      if (!focusStorm) return;
+      // ✅ FEATURE 1: Check for manual focus first
+      if (focusedStormId) {
+        const found = activeStorms.find(s => s.id === focusedStormId);
+        if (found) targetStorm = found;
+      } else {
+         // Fallback to strongest
+         targetStorm = [...activeStorms].sort((a, b) => (b.wind ?? 0) - (a.wind ?? 0))[0];
+      }
+
+      if (!targetStorm) return;
 
       const prev = lastCameraTarget.current;
-
-      // Only move camera if the storm has moved significantly or target changed
-      // This prevents locking the user's manual controls
       const movedEnough =
         !prev ||
-        Math.abs(prev.lat - focusStorm.lat) > 0.5 ||
-        Math.abs(prev.lng - focusStorm.lng) > 0.5 ||
-        prev.id !== focusStorm.id;
+        Math.abs(prev.lat - targetStorm.lat) > 0.5 ||
+        Math.abs(prev.lng - targetStorm.lng) > 0.5 ||
+        prev.id !== targetStorm.id;
 
       if (movedEnough) {
         globeEl.current.pointOfView(
           {
-            lat: focusStorm.lat,
-            lng: focusStorm.lng,
-            altitude: 1.6, // Slightly closer for active tracking
+            lat: targetStorm.lat,
+            lng: targetStorm.lng,
+            altitude: focusedStormId ? 1.2 : 1.6, // Zoom in if focused
           },
-          800 // Smooth transition
+          800
         );
 
         lastCameraTarget.current = {
-          lat: focusStorm.lat,
-          lng: focusStorm.lng,
-          id: focusStorm.id,
+          lat: targetStorm.lat, lng: targetStorm.lng, id: targetStorm.id,
         };
       }
     }
-  }, [activeScenario, activeStorms]);
+  }, [activeScenario, activeStorms, focusedStormId]);
 
-  // FEATURE 5: Click to focus manually
+  // ✅ FEATURE 1 CLICK HANDLER - FIXED
   const handleStormClick = (storm: any) => {
-    if (globeEl.current) {
+    // Handle both storm objects (from props) and click data (from rings/labels)
+    const stormId = storm.stormId || storm.id;
+    
+    if (onStormSelect && stormId) {
+      onStormSelect(stormId);
+    }
+    
+    // Legacy fallback: Manual camera focus
+    if (!onStormSelect && globeEl.current) {
       globeEl.current.pointOfView({
         lat: storm.lat,
         lng: storm.lng,
@@ -146,7 +155,7 @@ export default function TacticalGlobe({
   };
 
   /* --------------------------------------------------
-     4. INTELLIGENCE ENGINE (CALCULATIONS)
+     4. INTELLIGENCE ENGINE
   -------------------------------------------------- */
 
   const { visualFleet, escapeRoutes, affectedCount } = useMemo(() => {
@@ -158,10 +167,7 @@ export default function TacticalGlobe({
       let threatSource: any = null;
 
       if (activeScenario) {
-        const d = Math.hypot(
-          ship.lat - activeScenario.lat,
-          ship.lng - activeScenario.lng
-        );
+        const d = Math.hypot(ship.lat - activeScenario.lat, ship.lng - activeScenario.lng);
         if (d < activeScenario.radius) {
           isAffected = true;
           threatSource = activeScenario;
@@ -170,10 +176,7 @@ export default function TacticalGlobe({
 
       if (!isAffected) {
         for (const storm of activeStorms) {
-          const d = Math.hypot(
-            ship.lat - storm.lat,
-            ship.lng - storm.lng
-          );
+          const d = Math.hypot(ship.lat - storm.lat, ship.lng - storm.lng);
           if (d < storm.radius) {
             isAffected = true;
             threatSource = storm;
@@ -184,10 +187,7 @@ export default function TacticalGlobe({
 
       if (isAffected && threatSource) {
         affected++;
-        const angle = Math.atan2(
-          ship.lng - threatSource.lng,
-          ship.lat - threatSource.lat
-        );
+        const angle = Math.atan2(ship.lng - threatSource.lng, ship.lat - threatSource.lat);
         const safeDist = threatSource.radius * 1.5;
         routes.push({
           startLat: ship.lat,
@@ -206,15 +206,11 @@ export default function TacticalGlobe({
       };
     });
 
-    return {
-      visualFleet: processedShips,
-      escapeRoutes: routes,
-      affectedCount: affected,
-    };
+    return { visualFleet: processedShips, escapeRoutes: routes, affectedCount: affected };
   }, [fleet, activeScenario, activeStorms]);
 
   /* --------------------------------------------------
-     5. SAFE PARENT UPDATE
+     5. PARENT UPDATE
   -------------------------------------------------- */
 
   useEffect(() => {
@@ -224,7 +220,7 @@ export default function TacticalGlobe({
   }, [affectedCount, onUpdateAnalysis]);
 
   /* --------------------------------------------------
-     6. VISUAL DATA PREPARATION
+     6. VISUAL DATA (WITH FOCUS STYLING)
   -------------------------------------------------- */
 
   const combinedRings = useMemo(() => {
@@ -239,18 +235,21 @@ export default function TacticalGlobe({
       });
     }
 
+    // Storm rings with focus styling
     activeStorms.forEach(storm =>
       rings.push({
         lat: storm.lat,
         lng: storm.lng,
         maxRadius: storm.radius,
         color: storm.color || 'orange',
-        ...storm // Pass storm data for click handler
+        stormId: storm.id,
+        // ✅ Focus styling: White ring for focused storm
+        isFocused: focusedStormId === storm.id,
       })
     );
 
     return rings;
-  }, [activeScenario, activeStorms]);
+  }, [activeScenario, activeStorms, focusedStormId]);
 
   const combinedLabels = useMemo(
     () =>
@@ -258,20 +257,26 @@ export default function TacticalGlobe({
         lat: storm.lat,
         lng: storm.lng,
         text: `${storm.name} (${storm.wind}kt)`,
-        color: 'white',
-        size: 1.5,
-        ...storm
+        // ✅ Focus styling: Larger and brighter for focused storm
+        size: focusedStormId === storm.id ? 2.2 : 1.5,
+        color: focusedStormId && storm.id !== focusedStormId
+          ? 'rgba(255,255,255,0.3)' // Dimmed for non-focused storms
+          : 'white',
+        stormId: storm.id,
       })),
-    [activeStorms]
+    [activeStorms, focusedStormId]
   );
 
   const stormPaths = useMemo(
     () =>
       activeStorms.map(storm => ({
         coords: storm.fullTrack || [],
-        color: 'rgba(255,255,255,0.15)',
+        // ✅ Focus styling: Highlighted path for focused storm
+        color: focusedStormId === storm.id
+          ? 'rgba(255,0,0,0.6)'
+          : 'rgba(255,255,255,0.15)',
       })),
-    [activeStorms]
+    [activeStorms, focusedStormId]
   );
 
   /* --------------------------------------------------
@@ -281,8 +286,7 @@ export default function TacticalGlobe({
   return (
     <div ref={containerRef} className="w-full h-full">
       {dimensions.width > 0 && (
-        // @ts-ignore - Ignoring strict prop types to allow interaction events
-        <Globe
+        <InteractiveGlobe
           ref={globeEl}
           width={dimensions.width}
           height={dimensions.height}
@@ -299,16 +303,20 @@ export default function TacticalGlobe({
           pointLabel="label"
 
           ringsData={combinedRings}
-          ringColor={(d: any) => () => d.color}
+          // ✅ Apply focus styling to rings
+          ringColor={(d: any) => d.isFocused ? '#ffffff' : d.color}
           ringMaxRadius={(d: any) => d.maxRadius}
           ringPropagationSpeed={2}
           ringRepeatPeriod={1000}
+          onRingClick={handleStormClick} // ✅ Now valid due to InteractiveGlobe cast
 
           labelsData={combinedLabels}
           labelLat="lat"
           labelLng="lng"
           labelText="text"
-          labelSize={1.5}
+          labelSize="size"
+          labelColor="color"
+          onLabelClick={handleStormClick} // ✅ Now valid
 
           arcsData={escapeRoutes}
           arcColor="color"
