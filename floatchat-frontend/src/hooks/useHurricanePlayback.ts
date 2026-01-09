@@ -44,6 +44,102 @@ const getCategoryColor = (category: string): string => {
   }
 };
 
+// ✅ FEATURE 3: Category Context Helper
+const getCategoryContext = (category: string): string => {
+  switch (category) {
+    case 'Cat 5':
+      return 'CATASTROPHIC. Total fleet avoidance required. Critical structural damage likely.';
+    case 'Cat 4':
+      return 'EXTREME. Severe structural damage risk. All non-essential vessels must divert.';
+    case 'Cat 3':
+      return 'MAJOR. Small vessels capsize. High waves, dangerous conditions.';
+    case 'Cat 2':
+      return 'MODERATE-HIGH. Rough seas, risk to navigation. Exercise extreme caution.';
+    case 'Cat 1':
+      return 'MODERATE. Rough seas. Standard naval operating procedures apply.';
+    case 'TS':
+      return 'LOW. Minor drift issues. Increased watchkeeping advised.';
+    case 'TD':
+      return 'MINIMAL. Monitoring advised. Maintain normal operations.';
+    default:
+      return 'Status unclear. Proceed with standard caution.';
+  }
+};
+
+// ✅ FEATURE 3: Lifecycle Phase Helper
+const getLifecyclePhase = (
+  currentWind: number,
+  previousWind: number | null,
+  peakWind: number,
+  isActive: boolean
+): { phase: string; color: string } => {
+  if (!isActive) {
+    return { phase: 'DISSIPATED', color: 'text-gray-400' };
+  }
+  
+  // If at peak or very close to it
+  if (currentWind >= peakWind - 5) {
+    return { phase: 'PEAK INTENSITY', color: 'text-purple-400' };
+  }
+  
+  // Determine trend if we have previous wind data
+  if (previousWind !== null) {
+    const windDifference = currentWind - previousWind;
+    
+    if (windDifference > 5) {
+      return { phase: 'RAPID INTENSIFICATION', color: 'text-red-500' };
+        } else if (windDifference > 1) {
+      return { phase: 'INTENSIFYING', color: 'text-red-400' };
+        } else if (windDifference < -5) {
+      return { phase: 'RAPID WEAKENING', color: 'text-green-500' };
+        } else if (windDifference < -1) {
+      return { phase: 'WEAKENING', color: 'text-green-400' };
+        }
+  }
+  
+  // Default case
+  return { phase: 'STABLE', color: 'text-yellow-400' };
+};
+
+// ✅ FEATURE 3: Lifecycle Phase Description Helper
+const getLifecycleDescription = (phase: string): string => {
+  switch (phase) {
+    case 'RAPID INTENSIFICATION':
+      return 'Storm is rapidly gaining strength. Immediate risk assessment required.';
+    case 'INTENSIFYING':
+      return 'Storm is gaining strength. Increasing risk to maritime operations.';
+    case 'PEAK INTENSITY':
+      return 'Storm at maximum observed strength. Maximum threat level active.';
+    case 'STABLE':
+      return 'Storm intensity holding steady. Maintain current operational posture.';
+    case 'WEAKENING':
+      return 'Storm is losing strength. Gradual reduction in threat level.';
+    case 'RAPID WEAKENING':
+      return 'Storm is rapidly deteriorating. Threat level decreasing quickly.';
+    case 'DISSIPATED':
+      return 'Storm no longer poses significant threat. Returning to normal operations.';
+    default:
+      return 'Monitoring storm development.';
+  }
+};
+
+// ✅ FEATURE 5: Season Classification Helper
+const getSeasonClassification = (stormCount: number): string => {
+  if (stormCount < 12) return 'Quiet Season';
+  if (stormCount >= 12 && stormCount <= 19) return 'Active Season';
+  return 'EXTREME / HYPER-ACTIVE';
+};
+
+// ✅ FEATURE 5: Season Classification Color Helper
+const getSeasonClassificationColor = (classification: string): string => {
+  switch (classification) {
+    case 'EXTREME / HYPER-ACTIVE': return 'text-red-500';
+    case 'Active Season': return 'text-orange-400';
+    case 'Quiet Season': return 'text-green-400';
+    default: return 'text-gray-400';
+  }
+};
+
 export function useHurricanePlayback() {
   const [allData, setAllData] = useState<Record<string, Storm[]> | null>(null);
   const [selectedYear, setSelectedYear] = useState(2005);
@@ -139,40 +235,81 @@ export function useHurricanePlayback() {
     });
   }, [allData, selectedYear, currentDate]);
 
-  /* SEASON STATS */
+  /* ✅ FEATURE 5: ENHANCED SEASON STATS */
   const seasonStats = useMemo(() => {
     if (!allData || !allData[selectedYear]) return null;
     let maxWind = 0;
     let strongestStorm = '';
+    let totalTrackPoints = 0;
+    let majorHurricanesCount = 0;
     const regionCounts = { Gulf: 0, Atlantic: 0, Caribbean: 0 };
+    const stormNames: string[] = [];
 
-    allData[selectedYear].forEach(s =>
+    // ✅ REFACTOR: Collect all dates first to avoid TS "never" errors
+    const allDates: Date[] = [];
+
+    allData[selectedYear].forEach(s => {
+      stormNames.push(s.name);
       s.track.forEach(p => {
         if (p.wind > maxWind) {
           maxWind = p.wind;
           strongestStorm = s.name;
         }
+        if (p.wind >= 96) { // Cat 3+
+          majorHurricanesCount++;
+        }
         if (p.lat > 18 && p.lat < 30 && p.lng < -80) regionCounts.Gulf++;
         else if (p.lat < 22 && p.lng > -88 && p.lng < -60) regionCounts.Caribbean++;
         else regionCounts.Atlantic++;
-      })
-    );
+        
+        totalTrackPoints++;
+        allDates.push(new Date(p.time));
+      });
+    });
+
+    // Sort to find exact season boundaries
+    allDates.sort((a, b) => a.getTime() - b.getTime());
+    const firstStormDate = allDates.length > 0 ? allDates[0] : null;
+    const lastStormDate = allDates.length > 0 ? allDates[allDates.length - 1] : null;
 
     const count = allData[selectedYear].length;
+    const classification = getSeasonClassification(count);
+    const classificationColor = getSeasonClassificationColor(classification);
     const dominantRegion = Object.keys(regionCounts).reduce((a, b) => 
       regionCounts[a as keyof typeof regionCounts] > regionCounts[b as keyof typeof regionCounts] ? a : b
     );
+
+    // Calculate average storm duration (in days)
+    const avgDuration = count > 0 ? Math.round((totalTrackPoints / count) / 4) : 0;
+
+    // Calculate season duration in months
+    let seasonDuration = '';
+    if (firstStormDate && lastStormDate) {
+      const monthDiff = (lastStormDate.getMonth() - firstStormDate.getMonth() + 
+                        (lastStormDate.getFullYear() - firstStormDate.getFullYear()) * 12) + 1;
+      seasonDuration = `${monthDiff} month${monthDiff !== 1 ? 's' : ''}`;
+    }
 
     return {
       totalStorms: count,
       maxWind,
       strongestStorm,
-      classification: count < 8 ? 'Quiet' : count > 18 ? 'EXTREME' : count > 12 ? 'Active' : 'Moderate',
+      classification,
+      classificationColor,
       dominantRegion,
+      stormNames,
+      majorHurricanesCount,
+      avgDuration,
+      seasonDuration,
+      firstStormDate,
+      lastStormDate,
+      // Additional metrics for display
+      seasonIntensity: maxWind >= 150 ? 'Record Breaking' : maxWind >= 130 ? 'Extreme' : maxWind >= 100 ? 'High' : 'Moderate',
+      majorHurricaneRatio: count > 0 ? Math.round((majorHurricanesCount / count) * 100) : 0,
     };
   }, [allData, selectedYear]);
 
-  /* ✅ FEATURE 2: FOCUSED STORM STATS */
+  /* ✅ FEATURE 2 & 3: FOCUSED STORM STATS with Lifecycle Analysis */
   const focusedStormStats = useMemo(() => {
     if (!focusedStormId || !activeStorms.length) return null;
     
@@ -192,10 +329,41 @@ export function useHurricanePlayback() {
       }
     });
 
-    // Determine status
+    // Find current wind and previous wind for lifecycle analysis
     const currentWind = focusedStorm.wind || 0;
-    const status = currentWind > 0 ? 'ACTIVE' : 'DISSIPATED';
+    let previousWind: number | null = null;
     
+    // Find the track segment we're currently in
+    const t = currentDate.getTime();
+    for (let i = 0; i < originalStorm.track.length - 1; i++) {
+      const p1 = originalStorm.track[i];
+      const p2 = originalStorm.track[i + 1];
+      const t1 = new Date(p1.time).getTime();
+      const t2 = new Date(p2.time).getTime();
+
+      if (t >= t1 && t <= t2) {
+        // Use the previous point's wind for trend analysis
+        previousWind = p1.wind;
+        break;
+      }
+    }
+
+    // Determine if storm is active (wind > 0)
+    const isActive = currentWind > 0;
+    
+    // ✅ FEATURE 3: Calculate lifecycle phase
+    const currentCategory = getStormCategory(currentWind);
+    const peakCategory = getStormCategory(peakWind);
+    const { phase: lifecyclePhase, color: lifecycleColor } = getLifecyclePhase(
+      currentWind,
+      previousWind,
+      peakWind,
+      isActive
+    );
+    
+    const lifecycleDescription = getLifecycleDescription(lifecyclePhase);
+    const categoryContext = getCategoryContext(currentCategory);
+
     // Calculate days active (rough estimate based on track length)
     const daysActive = originalStorm.track.length > 0 
       ? Math.ceil(originalStorm.track.length / 4) 
@@ -206,19 +374,25 @@ export function useHurricanePlayback() {
       name: focusedStorm.name,
       year: focusedStorm.year || selectedYear,
       currentWind,
-      currentCategory: getStormCategory(currentWind),
-      categoryColor: getCategoryColor(getStormCategory(currentWind)),
+      currentCategory,
+      categoryColor: getCategoryColor(currentCategory),
       peakWind,
-      peakCategory: getStormCategory(peakWind),
-      peakCategoryColor: getCategoryColor(getStormCategory(peakWind)),
-      status,
+      peakCategory,
+      peakCategoryColor: getCategoryColor(peakCategory),
+      status: isActive ? 'ACTIVE' : 'DISSIPATED',
       daysActive,
       trackPoints: originalStorm.track.length,
-      // For visual indicators
-      isActive: currentWind > 0,
-      intensityChange: currentWind >= peakWind ? 'Peaking' : 'Weakening',
+      isActive,
+      // ✅ FEATURE 3: New fields for lifecycle and context
+      lifecyclePhase,
+      lifecycleColor,
+      lifecycleDescription,
+      categoryContext,
+      // Additional data for context
+      previousWind,
+      windChange: previousWind !== null ? currentWind - previousWind : 0,
     };
-  }, [focusedStormId, activeStorms, allData, selectedYear]);
+  }, [focusedStormId, activeStorms, allData, selectedYear, currentDate]);
 
   return {
     activeStorms,
@@ -233,9 +407,8 @@ export function useHurricanePlayback() {
     setPlaybackSpeed,
     focusedStormId,
     setFocusedStormId,
-    // ✅ FEATURE 2: Export focused storm stats
+    // ✅ FEATURE 2 & 3: Export focused storm stats
     focusedStormStats,
-    // ✅ FEATURE 2: Export helper function if needed elsewhere
     getStormCategory,
   };
 }

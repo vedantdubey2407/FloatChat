@@ -14,7 +14,13 @@ const InteractiveGlobe = Globe as any;
 export interface TacticalGlobeProps {
   activeScenario: any | null;
   activeStorms?: any[];
-  onUpdateAnalysis?: (count: number) => void;
+  // ✅ FEATURE 4: Updated callback signature
+  onUpdateAnalysis?: (data: { 
+    count: number; 
+    severity: string; 
+    sitrep: string;
+    affectedShips?: any[];
+  }) => void;
   // ✅ FEATURE 1: Selection Props
   focusedStormId?: string | null;
   onStormSelect?: (id: string) => void;
@@ -63,7 +69,7 @@ export default function TacticalGlobe({
   }, []);
 
   /* --------------------------------------------------
-     2. SIMULATED FLEET
+     2. SIMULATED FLEET (RUNS ONLY ONCE)
   -------------------------------------------------- */
 
   useEffect(() => {
@@ -73,6 +79,7 @@ export default function TacticalGlobe({
       lng: Math.random() * 360 - 180,
       name: `Vessel-${100 + i}`,
       type: Math.random() > 0.5 ? 'CARGO' : 'TANKER',
+      cargoValue: Math.floor(Math.random() * 50) + 10, // $10-60M value
     }));
     setFleet(ships);
   }, []);
@@ -155,22 +162,30 @@ export default function TacticalGlobe({
   };
 
   /* --------------------------------------------------
-     4. INTELLIGENCE ENGINE
+     4. ENHANCED INTELLIGENCE ENGINE (FEATURE 4)
   -------------------------------------------------- */
 
-  const { visualFleet, escapeRoutes, affectedCount } = useMemo(() => {
+  const { visualFleet, escapeRoutes, threatAnalysis } = useMemo(() => {
     let affected = 0;
+    const affectedShips: any[] = [];
     const routes: any[] = [];
+    
+    // ✅ FEATURE 4: Track threat factors
+    let majorHurricaneThreat = false;
+    let totalCargoValue = 0;
+    const threateningStorms = new Set<string>();
 
     const processedShips = fleet.map(ship => {
       let isAffected = false;
       let threatSource: any = null;
+      let threatCategory = '';
 
       if (activeScenario) {
         const d = Math.hypot(ship.lat - activeScenario.lat, ship.lng - activeScenario.lng);
         if (d < activeScenario.radius) {
           isAffected = true;
           threatSource = activeScenario;
+          threatCategory = 'SCENARIO';
         }
       }
 
@@ -180,6 +195,23 @@ export default function TacticalGlobe({
           if (d < storm.radius) {
             isAffected = true;
             threatSource = storm;
+            
+            // ✅ FEATURE 4: Check for major hurricane (Cat 3+)
+            if (storm.wind >= 96) { // Cat 3+ threshold
+              majorHurricaneThreat = true;
+              threateningStorms.add(storm.name);
+            }
+            
+            // Track affected ships
+            affectedShips.push({
+              ...ship,
+              threatStorm: storm.name,
+              stormCategory: storm.category || 'Unknown',
+              stormWind: storm.wind,
+              distance: Math.round(d * 100) / 100,
+            });
+            
+            totalCargoValue += ship.cargoValue || 0;
             break;
           }
         }
@@ -203,21 +235,90 @@ export default function TacticalGlobe({
         color: isAffected ? '#ef4444' : '#ffffff',
         size: isAffected ? 1.0 : 0.3,
         label: isAffected ? `⚠️ REROUTING: ${ship.name}` : ship.name,
+        isAffected,
       };
     });
 
-    return { visualFleet: processedShips, escapeRoutes: routes, affectedCount: affected };
+    // ✅ FEATURE 4: Calculate severity level
+    let severity = 'LOW';
+    if (affected > 5 || (affected > 0 && majorHurricaneThreat)) {
+      severity = 'CRITICAL';
+    } else if (affected > 0) {
+      severity = 'MODERATE';
+    }
+
+    // ✅ FEATURE 4: Generate SITREP based on analysis
+    let sitrep = '';
+    if (severity === 'CRITICAL') {
+      if (majorHurricaneThreat) {
+        const stormList = Array.from(threateningStorms).join(', ');
+        sitrep = `CRITICAL DISRUPTION: ${affected} vessels in major hurricane zone (${stormList}). Immediate fleet-wide diversion protocols activated.`;
+      } else {
+        sitrep = `MASSIVE DISRUPTION: ${affected} vessels at high risk. Fleet coordination center at DEFCON 3.`;
+      }
+    } else if (severity === 'MODERATE') {
+      sitrep = `MODERATE DISRUPTION: ${affected} vessels requiring course correction. Regional command monitoring situation.`;
+    } else {
+      if (activeStorms.length > 0) {
+        const stormCount = activeStorms.length;
+        sitrep = `ROUTINE MONITORING: ${stormCount} active storm${stormCount > 1 ? 's' : ''} tracked. All vessels clear of immediate danger.`;
+      } else if (activeScenario) {
+        sitrep = `SCENARIO ACTIVE: ${activeScenario.name} simulation running. No historical storms active.`;
+      } else {
+        sitrep = `ALL CLEAR: No active threats detected. Fleet operations normal.`;
+      }
+    }
+
+    return {
+      visualFleet: processedShips,
+      escapeRoutes: routes,
+      threatAnalysis: {
+        count: affected,
+        severity,
+        sitrep,
+        affectedShips,
+        majorHurricaneThreat,
+        threateningStorms: Array.from(threateningStorms),
+        totalCargoValue: Math.round(totalCargoValue),
+      },
+    };
   }, [fleet, activeScenario, activeStorms]);
 
+  // ✅ FIX: Better approach - use a ref to track if we should update
+  const lastUpdateRef = useRef<{
+    count: number;
+    severity: string;
+    sitrep: string;
+    majorHurricaneThreat: boolean;
+  } | null>(null);
+
   /* --------------------------------------------------
-     5. PARENT UPDATE
+     5. SAFE PARENT UPDATE (UPDATED FOR FEATURE 4)
   -------------------------------------------------- */
 
   useEffect(() => {
-    if (onUpdateAnalysis) {
-      onUpdateAnalysis(affectedCount);
+    if (!onUpdateAnalysis) return;
+    
+    // Create a simplified version of threatAnalysis for comparison
+    const currentAnalysis = {
+      count: threatAnalysis.count,
+      severity: threatAnalysis.severity,
+      sitrep: threatAnalysis.sitrep,
+      majorHurricaneThreat: threatAnalysis.majorHurricaneThreat,
+    };
+    
+    // Only update if the core threat analysis has actually changed
+    const hasChanged = !lastUpdateRef.current ||
+      lastUpdateRef.current.count !== currentAnalysis.count ||
+      lastUpdateRef.current.severity !== currentAnalysis.severity ||
+      lastUpdateRef.current.sitrep !== currentAnalysis.sitrep ||
+      lastUpdateRef.current.majorHurricaneThreat !== currentAnalysis.majorHurricaneThreat;
+    
+    if (hasChanged) {
+      onUpdateAnalysis(threatAnalysis);
+      lastUpdateRef.current = currentAnalysis;
     }
-  }, [affectedCount, onUpdateAnalysis]);
+  }, [threatAnalysis, onUpdateAnalysis]);
 
   /* --------------------------------------------------
      6. VISUAL DATA (WITH FOCUS STYLING)
