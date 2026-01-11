@@ -5,8 +5,9 @@ import ast
 import random
 import certifi
 import httpx
-from functools import lru_cache
-from typing import Optional, Dict, Any
+import asyncio
+from typing import Optional, Dict, Any, List
+from datetime import datetime
 
 # FASTAPI
 from fastapi import FastAPI, HTTPException
@@ -17,7 +18,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from argopy import DataFetcher
 from openai import AsyncOpenAI
-from geopy.geocoders import Nominatim  # <--- 1. NEW IMPORT for Free Geocoding
+from geopy.geocoders import Nominatim
 
 # --------------------------------------------------
 # 1. CONFIGURATION & SETUP
@@ -37,7 +38,7 @@ app.add_middleware(
 )
 
 # Initialize Async Client
-client = AsyncOpenAI(
+openai_client = AsyncOpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=os.getenv("OPENROUTER_API_KEY"),
     default_headers={
@@ -52,7 +53,7 @@ geolocator = Nominatim(user_agent="floatchat_nav_system_v4")
 # Models
 MODEL_CHATBOT = "meta-llama/llama-3.3-70b-instruct:free"
 MODEL_SENTINEL = MODEL_CHATBOT 
-MODEL_ANALYST = MODEL_CHATBOT
+MODEL_ANALYST = "qwen/qwen3-coder:free"
 
 # --------------------------------------------------
 # 2. DATA MODELS & STATE
@@ -71,8 +72,17 @@ class RouteRequest(BaseModel):
 
 class RouteComparisonRequest(BaseModel):
     chosen_route: dict
-    alternate_routes: list[dict]
+    alternate_routes: List[dict]
     vessel_speed: int = 20
+
+class StormPayload(BaseModel):
+    name: str
+    wind: int
+    lat: float
+    lng: float
+    category: str
+    lifecycle: str
+    affected_ships: int
 
 # Global Camera State (In-Memory)
 camera_state = {
@@ -94,7 +104,7 @@ current_mission = {
 # 3. HELPER FUNCTIONS
 # --------------------------------------------------
 
-def get_location_coordinates(query: str):
+def get_location_coordinates(query: str) -> Optional[Dict[str, float]]:
     """
     Uses OpenStreetMap (Free) to find exact coordinates.
     Fixes AI hallucination of lat/lng.
@@ -108,7 +118,7 @@ def get_location_coordinates(query: str):
         print(f"⚠️ Geocoding Error: {e}")
     return None
 
-async def get_live_marine_data(lat, lng):
+async def get_live_marine_data(lat: float, lng: float) -> Dict[str, float]:
     """
     Fetches REAL wave height and wind speed from Open-Meteo (Free).
     """
@@ -144,6 +154,7 @@ async def get_live_marine_data(lat, lng):
 @app.get("/")
 async def root():
     return {"status": "FloatChat Systems Online", "mission_active": current_mission["active"]}
+
 @app.post("/chat")
 async def chat_bot(data: ChatRequest):
     """
@@ -189,7 +200,7 @@ async def chat_bot(data: ChatRequest):
         """
 
         # --- C. AI CALL ---
-        response = await client.chat.completions.create(
+        response = await openai_client.chat.completions.create(
             model=MODEL_CHATBOT,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -262,6 +273,7 @@ async def chat_bot(data: ChatRequest):
     except Exception as e:
         print(f"CHAT ERROR: {e}")
         return {"reply": "⚠️ Uplink unstable. AI offline.", "command": None}
+
 @app.post("/sentinel")
 async def check_anomaly(data: SentinelRequest):
     """
@@ -278,7 +290,7 @@ async def check_anomaly(data: SentinelRequest):
         Return a short verdict: NORMAL, WARNING, or CRITICAL, with 1 sentence explanation.
         """
 
-        response = await client.chat.completions.create(
+        response = await openai_client.chat.completions.create(
             model=MODEL_SENTINEL,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -291,7 +303,6 @@ async def check_anomaly(data: SentinelRequest):
     except Exception as e:
         print(f"SENTINEL ERROR: {e}")
         return {"alert": "⚠️ Sentinel Analysis Unavailable."}
-
 
 @app.post("/plan-route")
 async def plan_route(data: RouteRequest):
@@ -329,7 +340,7 @@ async def plan_route(data: RouteRequest):
         }}
         """
 
-        response = await client.chat.completions.create(
+        response = await openai_client.chat.completions.create(
             model=MODEL_ANALYST,
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": "Generate Report."}],
             temperature=0.1
@@ -376,7 +387,6 @@ async def plan_route(data: RouteRequest):
             "captain_summary": "Route calculation failed."
         }
 
-
 @app.post("/explain-decision")
 async def explain_route_decision(data: RouteComparisonRequest):
     """
@@ -402,7 +412,7 @@ async def explain_route_decision(data: RouteComparisonRequest):
         }}
         """
 
-        response = await client.chat.completions.create(
+        response = await openai_client.chat.completions.create(
             model=MODEL_CHATBOT,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -429,13 +439,10 @@ async def explain_route_decision(data: RouteComparisonRequest):
             }
         }
 
-
 # --------------------------------------------------
 # 5. DATA SIMULATION (FIXED)
 # --------------------------------------------------
 
-# Remove @lru_cache because async functions don't work well with it standardly
-# and we want live data anyway.
 @app.get("/ocean-data")
 async def get_real_data():  # <--- MUST BE ASYNC now
     floats = []
@@ -480,3 +487,182 @@ async def get_real_data():  # <--- MUST BE ASYNC now
         })
 
     return floats
+
+# --------------------------------------------------
+# 6. SITREP AI ANALYSIS ENDPOINT
+# --------------------------------------------------
+@app.post("/analyze")
+async def analyze_storm(data: StormPayload):
+    """
+    Generates a REAL AI-powered SITREP using the Analyst Model.
+    Replaces the old hardcoded mock logic.
+    """
+    try:
+        print(f"📡 Generating SITREP for Storm {data.name}...")
+
+        # 1. Construct the Prompt
+        # We give the AI the raw data and strict formatting rules.
+        system_prompt = f"""
+        You are a Senior Naval Intelligence Officer. Write a TACTICAL SITREP.
+        
+        DATA:
+        - Storm: {data.name} (Category: {data.category})
+        - Wind: {data.wind} knots ({data.lifecycle})
+        - Position: {data.lat:.2f}°N, {data.lng:.2f}°W
+        - Vessels Risk: {data.affected_ships} commercial units
+        
+        INSTRUCTIONS:
+        - Write a professional, military-style Situation Report.
+        - Analyze the specific combination of wind vs. ship count.
+        - If wind is low but ship count is high, warn about "Traffic Congestion" and "Collision Risk".
+        - If wind is high, warn about "Hull Stress" and "Capsize Risk".
+        - Format strictly in Markdown.
+        """
+
+        # 2. Call the AI Model (Qwen/Llama)
+        response = await openai_client.chat.completions.create(
+            model=MODEL_ANALYST, 
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": "Generate SITREP."}
+            ],
+            temperature=0.2 # Low temp for professional tone
+        )
+        
+        # 3. Clean Output
+        sitrep = response.choices[0].message.content.strip()
+        
+        # Remove Markdown code blocks if the AI adds them
+        if "```markdown" in sitrep:
+            sitrep = sitrep.split("```markdown")[1].split("```")[0].strip()
+        elif "```" in sitrep:
+            sitrep = sitrep.split("```")[1].split("```")[0].strip()
+
+        # 4. Return to Frontend
+        return {
+            "status": "analysis_complete",
+            "sitrep": sitrep,
+            "metadata": {
+                "storm_name": data.name,
+                "analysis_timestamp": datetime.now().isoformat(),
+                "threat_level": "AI_ASSESSED", 
+                "recommended_response": "See AI Report Details"
+            }
+        }
+        
+    except Exception as e:
+        print(f"SITREP ANALYSIS ERROR: {e}")
+        return {
+            "status": "error",
+            "sitrep": "⚠️ AI Intelligence Offline. Manual Assessment Required.",
+            "error": str(e)
+        }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

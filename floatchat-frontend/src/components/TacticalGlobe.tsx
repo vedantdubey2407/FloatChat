@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useMemo } from 'react';
 import Globe from 'react-globe.gl';
 import type { GlobeMethods } from 'react-globe.gl';
 
-// 1. Fix: Cast Globe to 'any' to allow onRingClick/onLabelClick props
+// 1. Fix: Cast Globe to 'any' to allow htmlElementsData/onRingClick props
 const InteractiveGlobe = Globe as any;
 
 /* --------------------------------------------------
@@ -24,6 +24,8 @@ export interface TacticalGlobeProps {
   // ✅ FEATURE 1: Selection Props
   focusedStormId?: string | null;
   onStormSelect?: (id: string) => void;
+  // ✅ NEW: Custom markers for Simulation Mode
+  scenarioMarkers?: any[];
 }
 
 /* --------------------------------------------------
@@ -36,6 +38,7 @@ export default function TacticalGlobe({
   onUpdateAnalysis,
   focusedStormId,
   onStormSelect,
+  scenarioMarkers = [], // Default to empty array
 }: TacticalGlobeProps) {
 
   const globeEl = useRef<GlobeMethods | undefined>(undefined);
@@ -142,16 +145,14 @@ export default function TacticalGlobe({
     }
   }, [activeScenario, activeStorms, focusedStormId]);
 
-  // ✅ FEATURE 1 CLICK HANDLER - FIXED
+  // ✅ FEATURE 1 CLICK HANDLER
   const handleStormClick = (storm: any) => {
-    // Handle both storm objects (from props) and click data (from rings/labels)
     const stormId = storm.stormId || storm.id;
     
     if (onStormSelect && stormId) {
       onStormSelect(stormId);
     }
     
-    // Legacy fallback: Manual camera focus
     if (!onStormSelect && globeEl.current) {
       globeEl.current.pointOfView({
         lat: storm.lat,
@@ -162,7 +163,7 @@ export default function TacticalGlobe({
   };
 
   /* --------------------------------------------------
-     4. ENHANCED INTELLIGENCE ENGINE (FEATURE 4)
+     4. ENHANCED INTELLIGENCE ENGINE
   -------------------------------------------------- */
 
   const { visualFleet, escapeRoutes, threatAnalysis } = useMemo(() => {
@@ -170,7 +171,6 @@ export default function TacticalGlobe({
     const affectedShips: any[] = [];
     const routes: any[] = [];
     
-    // ✅ FEATURE 4: Track threat factors
     let majorHurricaneThreat = false;
     let totalCargoValue = 0;
     const threateningStorms = new Set<string>();
@@ -178,14 +178,12 @@ export default function TacticalGlobe({
     const processedShips = fleet.map(ship => {
       let isAffected = false;
       let threatSource: any = null;
-      let threatCategory = '';
 
       if (activeScenario) {
         const d = Math.hypot(ship.lat - activeScenario.lat, ship.lng - activeScenario.lng);
         if (d < activeScenario.radius) {
           isAffected = true;
           threatSource = activeScenario;
-          threatCategory = 'SCENARIO';
         }
       }
 
@@ -196,13 +194,11 @@ export default function TacticalGlobe({
             isAffected = true;
             threatSource = storm;
             
-            // ✅ FEATURE 4: Check for major hurricane (Cat 3+)
-            if (storm.wind >= 96) { // Cat 3+ threshold
+            if (storm.wind >= 96) { 
               majorHurricaneThreat = true;
               threateningStorms.add(storm.name);
             }
             
-            // Track affected ships
             affectedShips.push({
               ...ship,
               threatStorm: storm.name,
@@ -239,7 +235,6 @@ export default function TacticalGlobe({
       };
     });
 
-    // ✅ FEATURE 4: Calculate severity level
     let severity = 'LOW';
     if (affected > 5 || (affected > 0 && majorHurricaneThreat)) {
       severity = 'CRITICAL';
@@ -247,7 +242,6 @@ export default function TacticalGlobe({
       severity = 'MODERATE';
     }
 
-    // ✅ FEATURE 4: Generate SITREP based on analysis
     let sitrep = '';
     if (severity === 'CRITICAL') {
       if (majorHurricaneThreat) {
@@ -284,7 +278,6 @@ export default function TacticalGlobe({
     };
   }, [fleet, activeScenario, activeStorms]);
 
-  // ✅ FIX: Better approach - use a ref to track if we should update
   const lastUpdateRef = useRef<{
     count: number;
     severity: string;
@@ -292,14 +285,9 @@ export default function TacticalGlobe({
     majorHurricaneThreat: boolean;
   } | null>(null);
 
-  /* --------------------------------------------------
-     5. SAFE PARENT UPDATE (UPDATED FOR FEATURE 4)
-  -------------------------------------------------- */
-
   useEffect(() => {
     if (!onUpdateAnalysis) return;
     
-    // Create a simplified version of threatAnalysis for comparison
     const currentAnalysis = {
       count: threatAnalysis.count,
       severity: threatAnalysis.severity,
@@ -307,7 +295,6 @@ export default function TacticalGlobe({
       majorHurricaneThreat: threatAnalysis.majorHurricaneThreat,
     };
     
-    // Only update if the core threat analysis has actually changed
     const hasChanged = !lastUpdateRef.current ||
       lastUpdateRef.current.count !== currentAnalysis.count ||
       lastUpdateRef.current.severity !== currentAnalysis.severity ||
@@ -336,7 +323,6 @@ export default function TacticalGlobe({
       });
     }
 
-    // Storm rings with focus styling
     activeStorms.forEach(storm =>
       rings.push({
         lat: storm.lat,
@@ -344,7 +330,6 @@ export default function TacticalGlobe({
         maxRadius: storm.radius,
         color: storm.color || 'orange',
         stormId: storm.id,
-        // ✅ Focus styling: White ring for focused storm
         isFocused: focusedStormId === storm.id,
       })
     );
@@ -358,10 +343,9 @@ export default function TacticalGlobe({
         lat: storm.lat,
         lng: storm.lng,
         text: `${storm.name} (${storm.wind}kt)`,
-        // ✅ Focus styling: Larger and brighter for focused storm
         size: focusedStormId === storm.id ? 2.2 : 1.5,
         color: focusedStormId && storm.id !== focusedStormId
-          ? 'rgba(255,255,255,0.3)' // Dimmed for non-focused storms
+          ? 'rgba(255,255,255,0.3)'
           : 'white',
         stormId: storm.id,
       })),
@@ -372,7 +356,6 @@ export default function TacticalGlobe({
     () =>
       activeStorms.map(storm => ({
         coords: storm.fullTrack || [],
-        // ✅ Focus styling: Highlighted path for focused storm
         color: focusedStormId === storm.id
           ? 'rgba(255,0,0,0.6)'
           : 'rgba(255,255,255,0.15)',
@@ -404,12 +387,11 @@ export default function TacticalGlobe({
           pointLabel="label"
 
           ringsData={combinedRings}
-          // ✅ Apply focus styling to rings
           ringColor={(d: any) => d.isFocused ? '#ffffff' : d.color}
           ringMaxRadius={(d: any) => d.maxRadius}
           ringPropagationSpeed={2}
           ringRepeatPeriod={1000}
-          onRingClick={handleStormClick} // ✅ Now valid due to InteractiveGlobe cast
+          onRingClick={handleStormClick}
 
           labelsData={combinedLabels}
           labelLat="lat"
@@ -417,7 +399,7 @@ export default function TacticalGlobe({
           labelText="text"
           labelSize="size"
           labelColor="color"
-          onLabelClick={handleStormClick} // ✅ Now valid
+          onLabelClick={handleStormClick}
 
           arcsData={escapeRoutes}
           arcColor="color"
@@ -433,6 +415,40 @@ export default function TacticalGlobe({
           pathColor="color"
           pathDashLength={0.05}
           pathDashGap={0.02}
+
+          // ✅ NEW: Custom HTML Elements for Simulation Mode
+          htmlElementsData={scenarioMarkers}
+          htmlLat={(d: any) => d.lat}
+          htmlLng={(d: any) => d.lng}
+          htmlElement={(d: any) => {
+            const el = document.createElement('div');
+            
+            // Icon Styling
+            if (d.type === 'PIRATE') {
+              el.innerHTML = '☠️';
+              el.style.fontSize = '24px';
+              el.style.cursor = 'pointer';
+              el.className = 'animate-pulse';
+            } else if (d.type === 'BLOCKAGE') {
+              el.innerHTML = '🛑';
+              el.style.fontSize = '32px';
+              el.className = 'animate-bounce';
+            } else if (d.type === 'SHIP_QUEUE') {
+              el.innerHTML = '🚢';
+              el.style.fontSize = '16px';
+              el.style.color = '#eab308'; // yellow-500
+            } else if (d.type === 'ICE_EDGE') {
+              el.innerHTML = '❄️';
+              el.style.fontSize = '14px';
+              el.style.opacity = '0.8';
+            }
+            
+            // Basic Tooltip
+            el.title = d.label || '';
+            el.style.pointerEvents = 'auto'; // Ensure hover/click works
+            
+            return el;
+          }}
         />
       )}
     </div>

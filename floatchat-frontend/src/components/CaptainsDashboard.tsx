@@ -23,12 +23,12 @@ export default function CaptainsDashboard({
       {/* HEADER */}
       <div className="flex justify-between items-center p-4 border-b border-gray-700 bg-black/40">
         <div className="flex items-center gap-3">
-          <h3 className="text-lg font-bold text-blue-100">{routeData.basic_info.primary_route_name}</h3>
+          <h3 className="text-lg font-bold text-blue-100">{routeData.basic_info?.primary_route_name || 'Route'}</h3>
           <span className={`px-2 py-0.5 rounded text-[10px] font-black tracking-wider ${
-            routeData.basic_info.risk_level === 'DANGER' ? 'bg-red-600 text-white' : 
-            routeData.basic_info.risk_level === 'SAFE' ? 'bg-green-600 text-black' : 'bg-yellow-500 text-black'
+            routeData.basic_info?.risk_level === 'DANGER' ? 'bg-red-600 text-white' : 
+            routeData.basic_info?.risk_level === 'SAFE' ? 'bg-green-600 text-black' : 'bg-yellow-500 text-black'
           }`}>
-            {routeData.basic_info.risk_level}
+            {routeData.basic_info?.risk_level || 'UNKNOWN'}
           </span>
         </div>
         <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors">✕</button>
@@ -56,24 +56,34 @@ export default function CaptainsDashboard({
             <div className="grid grid-cols-3 gap-2">
               <div className="bg-gray-800/50 p-2 rounded text-center border border-gray-700">
                 <div className="text-[10px] text-gray-500 uppercase">Distance</div>
-                <div className="text-xl font-mono text-white">{routeData.basic_info.distance_nm.toLocaleString()} <span className="text-xs">nm</span></div>
+                {/* ✅ FIXED: Added optional chaining and fallback */}
+                <div className="text-xl font-mono text-white">
+                  {routeData.basic_info?.distance_nm?.toLocaleString() ?? '0'} <span className="text-xs">nm</span>
+                </div>
               </div>
               <div className="bg-gray-800/50 p-2 rounded text-center border border-gray-700">
                 <div className="text-[10px] text-gray-500 uppercase">Time</div>
-                <div className="text-xl font-mono text-white">{routeData.basic_info.estimated_time_days} <span className="text-xs">days</span></div>
+                {/* ✅ FIXED: Added optional chaining and fallback */}
+                <div className="text-xl font-mono text-white">
+                  {routeData.basic_info?.estimated_time_days ?? '0'} <span className="text-xs">days</span>
+                </div>
               </div>
               <div className="bg-gray-800/50 p-2 rounded text-center border border-gray-700">
                 <div className="text-[10px] text-gray-500 uppercase">Fuel Est.</div>
-                <div className="text-xl font-mono text-blue-400">{routeData.good_to_have?.fuel_estimation.estimated_fuel_tons ?? 'N/A'} <span className="text-xs">tons</span></div>
+                {/* ✅ FIXED: Added robust nested check */}
+                <div className="text-xl font-mono text-blue-400">
+                  {routeData.good_to_have?.fuel_estimation?.estimated_fuel_tons ?? 'N/A'} <span className="text-xs">tons</span>
+                </div>
               </div>
             </div>
             <div className="p-3 bg-blue-900/20 border border-blue-500/20 rounded text-sm text-gray-300">
               <strong className="text-blue-400 block mb-1">Captain's Summary:</strong>
-              <ReactMarkdown>{routeData.captain_summary}</ReactMarkdown>
+              <ReactMarkdown>{routeData.captain_summary || "No summary available."}</ReactMarkdown>
             </div>
           </div>
         )}
 
+        {/* ... Rest of the component (RISKS, WEATHER, DECISION) remains the same ... */}
         {activeTab === 'RISKS' && (
           <div className="space-y-2">
             {routeData.risk_breakdown?.map((risk, i) => (
