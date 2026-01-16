@@ -53,7 +53,7 @@ geolocator = Nominatim(user_agent="floatchat_nav_system_v4")
 # Models
 MODEL_CHATBOT = "meta-llama/llama-3.3-70b-instruct:free"
 MODEL_SENTINEL = MODEL_CHATBOT 
-MODEL_ANALYST = "qwen/qwen3-coder:free"
+MODEL_ANALYST = "qwen/qwen-2.5-coder-32b-instruct"
 
 # --------------------------------------------------
 # 2. DATA MODELS & STATE
@@ -303,89 +303,121 @@ async def check_anomaly(data: SentinelRequest):
     except Exception as e:
         print(f"SENTINEL ERROR: {e}")
         return {"alert": "⚠️ Sentinel Analysis Unavailable."}
-
 @app.post("/plan-route")
 async def plan_route(data: RouteRequest):
     """
-    Advanced Naval Route Planner.
-    Updates the global mission memory so Chatbot knows the context.
+    Advanced Naval Route Planner (STRICT JSON).
     """
     try:
         system_prompt = f"""
-        You are an advanced Naval Route Planning and Decision Support AI.
-        
-        INPUT DATA:
-        Start: {data.start_lat}, {data.start_lng}
-        End: {data.end_lat}, {data.end_lng}
-        Speed: 20 knots
+YOU ARE A NAVAL ROUTE PLANNING ENGINE.
 
-        TASK: Analyze route and return COMPLETE JSON report.
-        
-        OUTPUT JSON STRUCTURE:
-        {{
-          "basic_info": {{
-            "origin": {{ "name": "Name", "coordinates": "{data.start_lat}, {data.start_lng}" }},
-            "destination": {{ "name": "Name", "coordinates": "{data.end_lat}, {data.end_lng}" }},
-            "primary_route_name": "Route Name",
-            "distance_nm": 0,
-            "estimated_time_days": 0,
-            "speed_knots": 20,
-            "risk_level": "SAFE | CAUTION | DANGER"
-          }},
-          "risk_breakdown": [ {{ "type": "Weather", "severity": "LOW", "description": "..." }} ],
-          "weather_summary": {{ "avg_wave_height_m": "0-0", "avg_wind_speed_knots": "0-0", "weather_notes": "..." }},
-          "good_to_have": {{ "fuel_estimation": {{ "estimated_fuel_tons": 0 }} }},
-          "alternate_routes": [ {{ "route_name": "Alt 1", "rejection_reason": "Too slow" }} ],
-          "captain_summary": "..."
-        }}
-        """
+STRICT RULES (MANDATORY):
+- OUTPUT ONLY VALID JSON
+- NO markdown
+- NO explanations
+- NO text before or after JSON
+- RESPONSE MUST START WITH {{ AND END WITH }}
+
+INPUT:
+Start Coordinates: {data.start_lat}, {data.start_lng}
+End Coordinates: {data.end_lat}, {data.end_lng}
+Vessel Speed: 20 knots
+
+OUTPUT JSON SCHEMA (EXACT):
+{{
+  "basic_info": {{
+    "origin": {{
+      "name": "Origin Name",
+      "coordinates": "{data.start_lat}, {data.start_lng}"
+    }},
+    "destination": {{
+      "name": "Destination Name",
+      "coordinates": "{data.end_lat}, {data.end_lng}"
+    }},
+    "primary_route_name": "Route Name",
+    "distance_nm": 0,
+    "estimated_time_days": 0,
+    "speed_knots": 20,
+    "risk_level": "SAFE | CAUTION | DANGER"
+  }},
+  "risk_breakdown": [
+    {{
+      "type": "Weather",
+      "severity": "LOW | MEDIUM | HIGH",
+      "description": "Short description"
+    }}
+  ],
+  "weather_summary": {{
+    "avg_wave_height_m": "0-0",
+    "avg_wind_speed_knots": "0-0",
+    "weather_notes": "Summary"
+  }},
+  "good_to_have": {{
+    "fuel_estimation": {{
+      "estimated_fuel_tons": 0
+    }}
+  }},
+  "alternate_routes": [
+    {{
+      "route_name": "Alt Route",
+      "rejection_reason": "Reason"
+    }}
+  ],
+  "captain_summary": "Final recommendation"
+}}
+"""
 
         response = await openai_client.chat.completions.create(
             model=MODEL_ANALYST,
-            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": "Generate Report."}],
-            temperature=0.1
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": "Generate route plan."}
+            ],
+            temperature=0.05
         )
-        
+
         raw = response.choices[0].message.content.strip()
-        match = re.search(r"\{.*\}", raw, re.DOTALL)
-        
-        if match:
-            route_data = json.loads(match.group(0))
+        print("ROUTE ANALYST RAW OUTPUT:\n", raw)
 
-            # --- MATH FIX ---
-            dist = route_data.get("basic_info", {}).get("distance_nm", 0)
-            if dist > 0:
-                hours = dist / 20
-                days = round(hours / 24, 1)
-                route_data["basic_info"]["estimated_time_days"] = days
+        # ✅ HARD PARSE (NO REGEX)
+        route_data = json.loads(raw)
 
-            # ✅ UPDATE MISSION MEMORY (Now with Names!)
-            basic = route_data.get("basic_info", {})
-            current_mission["active"] = True
-            
-            # Save Names if AI identified them, otherwise default
-            current_mission["origin"] = {
-                "lat": data.start_lat, 
-                "lng": data.start_lng, 
-                "name": basic.get("origin", {}).get("name", "Origin Point")
-            }
-            current_mission["destination"] = {
-                "lat": data.end_lat, 
-                "lng": data.end_lng, 
-                "name": basic.get("destination", {}).get("name", "Destination Point")
-            }
-            current_mission["summary"] = route_data.get("captain_summary", "")
+        # ---- CALCULATED FIELDS ----
+        distance_nm = route_data["basic_info"].get("distance_nm", 0)
+        if distance_nm > 0:
+            hours = distance_nm / 20
+            route_data["basic_info"]["estimated_time_days"] = round(hours / 24, 2)
 
-            return route_data
-        else:
-            raise ValueError("No JSON found")
+        # ---- UPDATE MISSION MEMORY ----
+        current_mission["active"] = True
+        current_mission["origin"] = {
+            "lat": data.start_lat,
+            "lng": data.start_lng,
+            "name": route_data["basic_info"]["origin"]["name"]
+        }
+        current_mission["destination"] = {
+            "lat": data.end_lat,
+            "lng": data.end_lng,
+            "name": route_data["basic_info"]["destination"]["name"]
+        }
+        current_mission["summary"] = route_data.get("captain_summary", "")
+
+        return route_data
+
+    except json.JSONDecodeError as e:
+        print("JSON PARSE FAILURE:", e)
+        return {
+            "basic_info": {
+                "primary_route_name": "Parsing Error",
+                "risk_level": "CAUTION"
+            },
+            "captain_summary": "AI returned malformed route data."
+        }
 
     except Exception as e:
-        print(f"ROUTE ERROR: {e}")
-        return {
-            "basic_info": { "risk_level": "CAUTION", "primary_route_name": "Error" },
-            "captain_summary": "Route calculation failed."
-        }
+        print("ROUTE PLANNER ERROR:", e)
+        raise HTTPException(status_code=500, detail="Route planning failed")
 
 @app.post("/explain-decision")
 async def explain_route_decision(data: RouteComparisonRequest):
@@ -411,6 +443,7 @@ async def explain_route_decision(data: RouteComparisonRequest):
           }}
         }}
         """
+        
 
         response = await openai_client.chat.completions.create(
             model=MODEL_CHATBOT,
@@ -557,112 +590,3 @@ async def analyze_storm(data: StormPayload):
             "sitrep": "⚠️ AI Intelligence Offline. Manual Assessment Required.",
             "error": str(e)
         }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
