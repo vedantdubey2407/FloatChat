@@ -29,34 +29,51 @@ export default function NavHeader() {
 
       {/* 2. NAVIGATION */}
       <nav className="absolute left-1/2 -translate-x-1/2 hidden md:flex items-center gap-1 p-1 bg-white/5 border border-white/10 rounded-full backdrop-blur-xl pointer-events-auto">
+        
+        {/* LINK 1: LIVE OPS */}
         <Link 
           href="/" 
-          className={`px-6 py-2 rounded-full text-xs font-bold transition-all whitespace-nowrap ${
+          className={`px-5 py-2 rounded-full text-xs font-bold transition-all whitespace-nowrap ${
             pathname === '/' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-400 hover:text-white hover:bg-white/5'
           }`}
         >
-          🌍 LIVE OPERATIONS
+          🌍 LIVE OPS
         </Link>
+
+        {/* LINK 2: WAR ROOM */}
         <Link 
           href="/war-room" 
-          className={`px-6 py-2 rounded-full text-xs font-bold transition-all flex items-center gap-2 whitespace-nowrap ${
+          className={`px-5 py-2 rounded-full text-xs font-bold transition-all flex items-center gap-2 whitespace-nowrap ${
             pathname === '/war-room' ? 'bg-red-600 text-white shadow-[0_0_15px_rgba(220,38,38,0.5)]' : 'text-gray-400 hover:text-red-400 hover:bg-red-900/10'
           }`}
         >
-          🚨 CRISIS WAR ROOM
+          🚨 WAR ROOM
         </Link>
+
+        {/* ✅ NEW LINK 3: SITUATION ROOM */}
+        <Link 
+          href="/situation-room" 
+          className={`px-5 py-2 rounded-full text-xs font-bold transition-all flex items-center gap-2 whitespace-nowrap ${
+            pathname === '/situation-room' ? 'bg-indigo-600 text-white shadow-[0_0_15px_rgba(79,70,229,0.5)]' : 'text-gray-400 hover:text-indigo-400 hover:bg-indigo-900/10'
+          }`}
+        >
+          🧠 SITUATION ROOM
+        </Link>
+
       </nav>
 
       {/* 3. STATUS & ACTIONS */}
       <div className="flex gap-6 items-center pointer-events-auto">
         
-        {/* ✅ FIXED: Added onClick to dispatch event */}
-        <button 
-          onClick={() => window.dispatchEvent(new CustomEvent('TOGGLE_PLANNER'))}
-          className="hidden lg:block px-4 py-2 bg-blue-900/30 border border-blue-500/30 rounded text-blue-300 text-xs font-bold uppercase hover:bg-blue-900/50 transition-colors active:scale-95 cursor-pointer"
-        >
-          Enable Route Planner
-        </button>
+        {/* ✅ SHOW PLANNER BUTTON (Only on Live Ops page) */}
+        {pathname === '/' && (
+            <button 
+              onClick={() => window.dispatchEvent(new CustomEvent('TOGGLE_PLANNER'))}
+              className="hidden lg:block px-4 py-2 bg-blue-900/30 border border-blue-500/30 rounded text-blue-300 text-xs font-bold uppercase hover:bg-blue-900/50 transition-colors active:scale-95 cursor-pointer"
+            >
+              Enable Route Planner
+            </button>
+        )}
 
         <div className="h-8 w-px bg-white/10 hidden lg:block"></div>
 

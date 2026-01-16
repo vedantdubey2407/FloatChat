@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useMemo } from 'react';
 import Globe from 'react-globe.gl';
 import type { GlobeMethods } from 'react-globe.gl';
 
-// 1. Fix: Cast Globe to 'any' to allow htmlElementsData/onRingClick props
+// 1. Fix: Cast Globe to 'any' to allow htmlElementsData/onRingClick/onGlobeClick props
 const InteractiveGlobe = Globe as any;
 
 /* --------------------------------------------------
@@ -26,6 +26,8 @@ export interface TacticalGlobeProps {
   onStormSelect?: (id: string) => void;
   // ✅ NEW: Custom markers for Simulation Mode
   scenarioMarkers?: any[];
+  // ✅ NEW: Handler for clicking the globe surface (for Situation Room spawning)
+  onGlobeClick?: (coords: { lat: number, lng: number }) => void;
 }
 
 /* --------------------------------------------------
@@ -39,6 +41,7 @@ export default function TacticalGlobe({
   focusedStormId,
   onStormSelect,
   scenarioMarkers = [], // Default to empty array
+  onGlobeClick,
 }: TacticalGlobeProps) {
 
   const globeEl = useRef<GlobeMethods | undefined>(undefined);
@@ -418,8 +421,11 @@ export default function TacticalGlobe({
 
           // ✅ NEW: Custom HTML Elements for Simulation Mode
           htmlElementsData={scenarioMarkers}
-          htmlLat={(d: any) => d.lat}
-          htmlLng={(d: any) => d.lng}
+          
+          // ⚠️ CRITICAL FIX: Handle both flat coordinates (Historical) and nested 'position' objects (Situation Room)
+          htmlLat={(d: any) => d.position ? d.position.lat : d.lat}
+          htmlLng={(d: any) => d.position ? d.position.lng : d.lng}
+          
           htmlElement={(d: any) => {
             const el = document.createElement('div');
             
@@ -441,14 +447,31 @@ export default function TacticalGlobe({
               el.innerHTML = '❄️';
               el.style.fontSize = '14px';
               el.style.opacity = '0.8';
+            } else if (d.type === 'SHIP') {
+              // Custom Ship for Situation Room
+              el.innerHTML = '🚢';
+              el.style.fontSize = '20px';
+              el.style.color = '#3b82f6'; // blue-500
+            } else if (d.type === 'STORM') {
+              // Custom Storm for Situation Room
+              el.innerHTML = '🌪️';
+              el.style.fontSize = '24px';
+              el.className = 'animate-spin-slow';
+            } else if (d.type === 'POLITICAL') {
+              el.innerHTML = '🏛️';
+              el.style.fontSize = '24px';
             }
             
             // Basic Tooltip
-            el.title = d.label || '';
+            el.title = d.label || d.name || '';
             el.style.pointerEvents = 'auto'; // Ensure hover/click works
+            el.style.cursor = 'help'; // Visual feedback
             
             return el;
           }}
+          
+          // ✅ NEW: Handle Clicking on the globe (Spawning)
+          onGlobeClick={onGlobeClick}
         />
       )}
     </div>

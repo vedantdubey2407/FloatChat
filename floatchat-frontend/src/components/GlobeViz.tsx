@@ -76,9 +76,18 @@ export default function GlobeViz({ flyTo, activeStorms = [] }: GlobeVizProps) {
   useEffect(() => {
     fetch('http://localhost:8000/ocean-data')
       .then(r => r.json())
-      .then(data => setRawFloats(data.map((f: any) => ({
-          lat: f.LATITUDE, lng: f.LONGITUDE, temp: f.TEMP, psu: f.PSU ?? 35, doxy: f.DOXY ?? 200, wave_height: f.WAVE_HEIGHT ?? 0.5
-      }))))
+      .then(response => {
+        // ✅ CRITICAL FIX: Access response.data because backend returns { "data": [...] }
+        const floats = response.data || [];
+        setRawFloats(floats.map((f: any) => ({
+            lat: f.LATITUDE, 
+            lng: f.LONGITUDE, 
+            temp: f.TEMP, 
+            psu: f.PSU ?? 35, 
+            doxy: f.DOXY ?? 200, 
+            wave_height: f.WAVE_HEIGHT ?? 0.5
+        })));
+      })
       .catch(console.error);
   }, []);
 
@@ -100,7 +109,7 @@ export default function GlobeViz({ flyTo, activeStorms = [] }: GlobeVizProps) {
     sun.position.set(1, 1, 1);
     scene.add(sun);
     
-    new THREE.TextureLoader().load('https://raw.githubusercontent.com/turban/webgl-earth/master/images/fair_clouds_4k.png', tex => {
+    new THREE.TextureLoader().load('//unpkg.com/three-globe/example/img/clouds.png', tex => {
        const clouds = new THREE.Mesh(new THREE.SphereGeometry(100.01, 64, 64), new THREE.MeshPhongMaterial({ map: tex, transparent: true, opacity: 0.8 }));
        scene.add(clouds);
        (function animate() { clouds.rotation.y += 0.0003; requestAnimationFrame(animate); })();
@@ -135,13 +144,11 @@ export default function GlobeViz({ flyTo, activeStorms = [] }: GlobeVizProps) {
     setAnalyzing(false);
   };
 
-  // ✅ FIXED CLICK LOGIC
+  // ✅ CLICK LOGIC
   const handleMapClick = (lat: number, lng: number) => {
-    // 1. If NOT in planner mode, do nothing (or clear selection)
     if (!plannerMode) return;
 
     console.log("📍 Route Point Added:", lat, lng);
-
     const point = { lat, lng };
     
     if (routePoints.length < 2) {
@@ -213,11 +220,11 @@ export default function GlobeViz({ flyTo, activeStorms = [] }: GlobeVizProps) {
   const stormLabels = activeStorms.map(storm => ({
     lat: storm.lat, lng: storm.lng, text: `${storm.name} (${storm.wind}kt)`, color: "white", size: 1.5
   }));
-  /* --- ✅ NEW: LISTEN FOR HEADER BUTTON CLICK --- */
+
+  /* --- LISTEN FOR HEADER BUTTON CLICK --- */
   useEffect(() => {
     const handleToggle = () => {
       setPlannerMode(prev => !prev);
-      // Reset state when toggling
       setRoutePoints([]);
       setRouteReport(null);
       setSelectedPoint(null);
@@ -289,13 +296,10 @@ export default function GlobeViz({ flyTo, activeStorms = [] }: GlobeVizProps) {
         labelSize={1.5}
         labelDotRadius={0.5}
 
-        // ✅ FIXED: Handle clicks on points AND empty space
         onPointClick={(p: any) => { 
             if (plannerMode) {
-                // If planning route, point click = add waypoint
                 handleMapClick(p.lat, p.lng);
             } else {
-                // Else select for details
                 setSelectedPoint(p); 
                 setAnalysis(null); 
             }
@@ -326,7 +330,6 @@ export default function GlobeViz({ flyTo, activeStorms = [] }: GlobeVizProps) {
         }}
       />
 
-      {/* Popups and Status */}
       {selectedPoint && !plannerMode && (
         <div className="absolute top-20 left-10 z-20 p-5 bg-black/80 backdrop-blur-md border border-blue-500/50 rounded-2xl text-white shadow-2xl max-w-sm">
           <h3 className="text-xl font-bold text-blue-400 mb-2">Float Data</h3>
