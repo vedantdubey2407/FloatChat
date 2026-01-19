@@ -24,10 +24,10 @@ export interface TacticalGlobeProps {
   // ✅ FEATURE 1: Selection Props
   focusedStormId?: string | null;
   onStormSelect?: (id: string) => void;
-  // ✅ NEW: Custom markers for Simulation Mode
-  scenarioMarkers?: any[];
-  // ✅ NEW: Handler for clicking the globe surface (for Situation Room spawning)
-  onGlobeClick?: (coords: { lat: number, lng: number }) => void;
+  
+  // ✅ SITUATION ROOM PROPS
+  scenarioMarkers?: any[]; // Custom entities (Ships, Zones)
+  onGlobeClick?: (coords: { lat: number, lng: number }) => void; // Spawning
 }
 
 /* --------------------------------------------------
@@ -148,7 +148,7 @@ export default function TacticalGlobe({
     }
   }, [activeScenario, activeStorms, focusedStormId]);
 
-  // ✅ FEATURE 1 CLICK HANDLER
+  // ✅ FEATURE 1 CLICK HANDLER (Standard Storms)
   const handleStormClick = (storm: any) => {
     const stormId = storm.stormId || storm.id;
     
@@ -430,10 +430,9 @@ export default function TacticalGlobe({
             const el = document.createElement('div');
             
             // Icon Styling
-            if (d.type === 'PIRATE') {
+            if (d.type === 'PIRACY') { // Corrected type string
               el.innerHTML = '☠️';
               el.style.fontSize = '24px';
-              el.style.cursor = 'pointer';
               el.className = 'animate-pulse';
             } else if (d.type === 'BLOCKAGE') {
               el.innerHTML = '🛑';
@@ -451,7 +450,8 @@ export default function TacticalGlobe({
               // Custom Ship for Situation Room
               el.innerHTML = '🚢';
               el.style.fontSize = '20px';
-              el.style.color = '#3b82f6'; // blue-500
+              el.style.color = d.isSelected ? '#3b82f6' : '#ffffff'; // Blue if selected
+              el.style.textShadow = d.isSelected ? '0 0 10px #3b82f6' : 'none';
             } else if (d.type === 'STORM') {
               // Custom Storm for Situation Room
               el.innerHTML = '🌪️';
@@ -462,10 +462,16 @@ export default function TacticalGlobe({
               el.style.fontSize = '24px';
             }
             
-            // Basic Tooltip
+            // Interaction Styles
             el.title = d.label || d.name || '';
-            el.style.pointerEvents = 'auto'; // Ensure hover/click works
-            el.style.cursor = 'help'; // Visual feedback
+            el.style.pointerEvents = 'auto'; // Ensure click is captured
+            el.style.cursor = 'pointer';
+            
+            // ✅ CRITICAL FIX: Add Click Listener for Selection
+            el.onclick = (e) => {
+                e.stopPropagation(); // Stop globe click
+                if (onStormSelect) onStormSelect(d.id);
+            };
             
             return el;
           }}

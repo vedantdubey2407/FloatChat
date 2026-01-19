@@ -1,6 +1,6 @@
 import { MaritimeEntity, InteractionEvent, GeoPoint } from '@/types/nexus';
 
-// Helper: Haversine Distance (nm)
+// Helper: Haversine Distance (Nautical Miles)
 function getDistance(p1: GeoPoint, p2: GeoPoint): number {
   if (!p1 || !p2) return 99999; // Safety guard
   

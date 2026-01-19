@@ -5,20 +5,22 @@ import ast
 import random
 import certifi
 import httpx
-import asyncio
-from typing import Optional, Dict, Any, List
-from datetime import datetime
+from functools import lru_cache
+from typing import Optional, Dict, Any
 
 # FASTAPI
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from datetime import datetime
+from typing import Dict, Any, List
+
 from pydantic import BaseModel
 
 # EXTERNAL LIBS
 from dotenv import load_dotenv
 from argopy import DataFetcher
 from openai import AsyncOpenAI
-from geopy.geocoders import Nominatim
+from geopy.geocoders import Nominatim  # <--- 1. NEW IMPORT for Free Geocoding
 
 # --------------------------------------------------
 # 1. CONFIGURATION & SETUP
@@ -38,7 +40,7 @@ app.add_middleware(
 )
 
 # Initialize Async Client
-openai_client = AsyncOpenAI(
+client = AsyncOpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=os.getenv("OPENROUTER_API_KEY"),
     default_headers={
@@ -53,7 +55,7 @@ geolocator = Nominatim(user_agent="floatchat_nav_system_v4")
 # Models
 MODEL_CHATBOT = "meta-llama/llama-3.3-70b-instruct:free"
 MODEL_SENTINEL = MODEL_CHATBOT 
-MODEL_ANALYST = "qwen/qwen-2.5-coder-32b-instruct"
+MODEL_ANALYST = MODEL_CHATBOT
 
 # --------------------------------------------------
 # 2. DATA MODELS & STATE
@@ -72,7 +74,7 @@ class RouteRequest(BaseModel):
 
 class RouteComparisonRequest(BaseModel):
     chosen_route: dict
-    alternate_routes: List[dict]
+    alternate_routes: list[dict]
     vessel_speed: int = 20
 
 class StormPayload(BaseModel):
@@ -83,6 +85,31 @@ class StormPayload(BaseModel):
     category: str
     lifecycle: str
     affected_ships: int
+# --- NEW MODELS FOR SITUATION ROOM ---
+class GeoPoint(BaseModel):
+    lat: float
+    lng: float
+
+class Entity(BaseModel):
+    id: str
+    type: str
+    name: str
+    position: GeoPoint
+    radiusNm: float
+    severity: str
+    attributes: Dict[str, Any] = {}
+
+class Interaction(BaseModel):
+    entityA: str
+    entityB: str
+    type: str
+    severityScore: int
+    description: str
+
+class SituationSnapshot(BaseModel):
+    entities: List[Entity]
+    active_interactions: List[Interaction]
+    global_risk_score: int
 
 # Global Camera State (In-Memory)
 camera_state = {
@@ -104,7 +131,7 @@ current_mission = {
 # 3. HELPER FUNCTIONS
 # --------------------------------------------------
 
-def get_location_coordinates(query: str) -> Optional[Dict[str, float]]:
+def get_location_coordinates(query: str):
     """
     Uses OpenStreetMap (Free) to find exact coordinates.
     Fixes AI hallucination of lat/lng.
@@ -118,7 +145,7 @@ def get_location_coordinates(query: str) -> Optional[Dict[str, float]]:
         print(f"⚠️ Geocoding Error: {e}")
     return None
 
-async def get_live_marine_data(lat: float, lng: float) -> Dict[str, float]:
+async def get_live_marine_data(lat, lng):
     """
     Fetches REAL wave height and wind speed from Open-Meteo (Free).
     """
@@ -154,7 +181,6 @@ async def get_live_marine_data(lat: float, lng: float) -> Dict[str, float]:
 @app.get("/")
 async def root():
     return {"status": "FloatChat Systems Online", "mission_active": current_mission["active"]}
-
 @app.post("/chat")
 async def chat_bot(data: ChatRequest):
     """
@@ -200,7 +226,7 @@ async def chat_bot(data: ChatRequest):
         """
 
         # --- C. AI CALL ---
-        response = await openai_client.chat.completions.create(
+        response = await client.chat.completions.create(
             model=MODEL_CHATBOT,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -273,7 +299,6 @@ async def chat_bot(data: ChatRequest):
     except Exception as e:
         print(f"CHAT ERROR: {e}")
         return {"reply": "⚠️ Uplink unstable. AI offline.", "command": None}
-
 @app.post("/sentinel")
 async def check_anomaly(data: SentinelRequest):
     """
@@ -290,7 +315,7 @@ async def check_anomaly(data: SentinelRequest):
         Return a short verdict: NORMAL, WARNING, or CRITICAL, with 1 sentence explanation.
         """
 
-        response = await openai_client.chat.completions.create(
+        response = await client.chat.completions.create(
             model=MODEL_SENTINEL,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -303,121 +328,91 @@ async def check_anomaly(data: SentinelRequest):
     except Exception as e:
         print(f"SENTINEL ERROR: {e}")
         return {"alert": "⚠️ Sentinel Analysis Unavailable."}
+
+
 @app.post("/plan-route")
 async def plan_route(data: RouteRequest):
     """
-    Advanced Naval Route Planner (STRICT JSON).
+    Advanced Naval Route Planner.
+    Updates the global mission memory so Chatbot knows the context.
     """
     try:
         system_prompt = f"""
-YOU ARE A NAVAL ROUTE PLANNING ENGINE.
+        You are an advanced Naval Route Planning and Decision Support AI.
+        
+        INPUT DATA:
+        Start: {data.start_lat}, {data.start_lng}
+        End: {data.end_lat}, {data.end_lng}
+        Speed: 20 knots
 
-STRICT RULES (MANDATORY):
-- OUTPUT ONLY VALID JSON
-- NO markdown
-- NO explanations
-- NO text before or after JSON
-- RESPONSE MUST START WITH {{ AND END WITH }}
+        TASK: Analyze route and return COMPLETE JSON report.
+        
+        OUTPUT JSON STRUCTURE:
+        {{
+          "basic_info": {{
+            "origin": {{ "name": "Name", "coordinates": "{data.start_lat}, {data.start_lng}" }},
+            "destination": {{ "name": "Name", "coordinates": "{data.end_lat}, {data.end_lng}" }},
+            "primary_route_name": "Route Name",
+            "distance_nm": 0,
+            "estimated_time_days": 0,
+            "speed_knots": 20,
+            "risk_level": "SAFE | CAUTION | DANGER"
+          }},
+          "risk_breakdown": [ {{ "type": "Weather", "severity": "LOW", "description": "..." }} ],
+          "weather_summary": {{ "avg_wave_height_m": "0-0", "avg_wind_speed_knots": "0-0", "weather_notes": "..." }},
+          "good_to_have": {{ "fuel_estimation": {{ "estimated_fuel_tons": 0 }} }},
+          "alternate_routes": [ {{ "route_name": "Alt 1", "rejection_reason": "Too slow" }} ],
+          "captain_summary": "..."
+        }}
+        """
 
-INPUT:
-Start Coordinates: {data.start_lat}, {data.start_lng}
-End Coordinates: {data.end_lat}, {data.end_lng}
-Vessel Speed: 20 knots
-
-OUTPUT JSON SCHEMA (EXACT):
-{{
-  "basic_info": {{
-    "origin": {{
-      "name": "Origin Name",
-      "coordinates": "{data.start_lat}, {data.start_lng}"
-    }},
-    "destination": {{
-      "name": "Destination Name",
-      "coordinates": "{data.end_lat}, {data.end_lng}"
-    }},
-    "primary_route_name": "Route Name",
-    "distance_nm": 0,
-    "estimated_time_days": 0,
-    "speed_knots": 20,
-    "risk_level": "SAFE | CAUTION | DANGER"
-  }},
-  "risk_breakdown": [
-    {{
-      "type": "Weather",
-      "severity": "LOW | MEDIUM | HIGH",
-      "description": "Short description"
-    }}
-  ],
-  "weather_summary": {{
-    "avg_wave_height_m": "0-0",
-    "avg_wind_speed_knots": "0-0",
-    "weather_notes": "Summary"
-  }},
-  "good_to_have": {{
-    "fuel_estimation": {{
-      "estimated_fuel_tons": 0
-    }}
-  }},
-  "alternate_routes": [
-    {{
-      "route_name": "Alt Route",
-      "rejection_reason": "Reason"
-    }}
-  ],
-  "captain_summary": "Final recommendation"
-}}
-"""
-
-        response = await openai_client.chat.completions.create(
+        response = await client.chat.completions.create(
             model=MODEL_ANALYST,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": "Generate route plan."}
-            ],
-            temperature=0.05
+            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": "Generate Report."}],
+            temperature=0.1
         )
-
+        
         raw = response.choices[0].message.content.strip()
-        print("ROUTE ANALYST RAW OUTPUT:\n", raw)
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        
+        if match:
+            route_data = json.loads(match.group(0))
 
-        # ✅ HARD PARSE (NO REGEX)
-        route_data = json.loads(raw)
+            # --- MATH FIX ---
+            dist = route_data.get("basic_info", {}).get("distance_nm", 0)
+            if dist > 0:
+                hours = dist / 20
+                days = round(hours / 24, 1)
+                route_data["basic_info"]["estimated_time_days"] = days
 
-        # ---- CALCULATED FIELDS ----
-        distance_nm = route_data["basic_info"].get("distance_nm", 0)
-        if distance_nm > 0:
-            hours = distance_nm / 20
-            route_data["basic_info"]["estimated_time_days"] = round(hours / 24, 2)
+            # ✅ UPDATE MISSION MEMORY (Now with Names!)
+            basic = route_data.get("basic_info", {})
+            current_mission["active"] = True
+            
+            # Save Names if AI identified them, otherwise default
+            current_mission["origin"] = {
+                "lat": data.start_lat, 
+                "lng": data.start_lng, 
+                "name": basic.get("origin", {}).get("name", "Origin Point")
+            }
+            current_mission["destination"] = {
+                "lat": data.end_lat, 
+                "lng": data.end_lng, 
+                "name": basic.get("destination", {}).get("name", "Destination Point")
+            }
+            current_mission["summary"] = route_data.get("captain_summary", "")
 
-        # ---- UPDATE MISSION MEMORY ----
-        current_mission["active"] = True
-        current_mission["origin"] = {
-            "lat": data.start_lat,
-            "lng": data.start_lng,
-            "name": route_data["basic_info"]["origin"]["name"]
-        }
-        current_mission["destination"] = {
-            "lat": data.end_lat,
-            "lng": data.end_lng,
-            "name": route_data["basic_info"]["destination"]["name"]
-        }
-        current_mission["summary"] = route_data.get("captain_summary", "")
-
-        return route_data
-
-    except json.JSONDecodeError as e:
-        print("JSON PARSE FAILURE:", e)
-        return {
-            "basic_info": {
-                "primary_route_name": "Parsing Error",
-                "risk_level": "CAUTION"
-            },
-            "captain_summary": "AI returned malformed route data."
-        }
+            return route_data
+        else:
+            raise ValueError("No JSON found")
 
     except Exception as e:
-        print("ROUTE PLANNER ERROR:", e)
-        raise HTTPException(status_code=500, detail="Route planning failed")
+        print(f"ROUTE ERROR: {e}")
+        return {
+            "basic_info": { "risk_level": "CAUTION", "primary_route_name": "Error" },
+            "captain_summary": "Route calculation failed."
+        }
+
 
 @app.post("/explain-decision")
 async def explain_route_decision(data: RouteComparisonRequest):
@@ -443,9 +438,8 @@ async def explain_route_decision(data: RouteComparisonRequest):
           }}
         }}
         """
-        
 
-        response = await openai_client.chat.completions.create(
+        response = await client.chat.completions.create(
             model=MODEL_CHATBOT,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -472,10 +466,13 @@ async def explain_route_decision(data: RouteComparisonRequest):
             }
         }
 
+
 # --------------------------------------------------
 # 5. DATA SIMULATION (FIXED)
 # --------------------------------------------------
 
+# Remove @lru_cache because async functions don't work well with it standardly
+# and we want live data anyway.
 @app.get("/ocean-data")
 async def get_real_data():  # <--- MUST BE ASYNC now
     floats = []
@@ -533,8 +530,6 @@ async def analyze_storm(data: StormPayload):
     try:
         print(f"📡 Generating SITREP for Storm {data.name}...")
 
-        # 1. Construct the Prompt
-        # We give the AI the raw data and strict formatting rules.
         system_prompt = f"""
         You are a Senior Naval Intelligence Officer. Write a TACTICAL SITREP.
         
@@ -552,33 +547,30 @@ async def analyze_storm(data: StormPayload):
         - Format strictly in Markdown.
         """
 
-        # 2. Call the AI Model (Qwen/Llama)
-        response = await openai_client.chat.completions.create(
-            model=MODEL_ANALYST, 
+        # ✅ FIX: use correct client name
+        response = await client.chat.completions.create(
+            model=MODEL_ANALYST,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": "Generate SITREP."}
             ],
-            temperature=0.2 # Low temp for professional tone
+            temperature=0.2
         )
         
-        # 3. Clean Output
         sitrep = response.choices[0].message.content.strip()
-        
-        # Remove Markdown code blocks if the AI adds them
+
         if "```markdown" in sitrep:
             sitrep = sitrep.split("```markdown")[1].split("```")[0].strip()
         elif "```" in sitrep:
             sitrep = sitrep.split("```")[1].split("```")[0].strip()
 
-        # 4. Return to Frontend
         return {
             "status": "analysis_complete",
             "sitrep": sitrep,
             "metadata": {
                 "storm_name": data.name,
                 "analysis_timestamp": datetime.now().isoformat(),
-                "threat_level": "AI_ASSESSED", 
+                "threat_level": "AI_ASSESSED",
                 "recommended_response": "See AI Report Details"
             }
         }
@@ -590,3 +582,94 @@ async def analyze_storm(data: StormPayload):
             "sitrep": "⚠️ AI Intelligence Offline. Manual Assessment Required.",
             "error": str(e)
         }
+# --------------------------------------------------
+# 7. SITUATION ROOM (NEXUS) - IMPROVED LOGIC
+# --------------------------------------------------
+@app.post("/analyze-situation")
+async def analyze_situation(data: SituationSnapshot):
+    """
+    NEXUS Situation Room Analysis.
+    Generates a Strategic SITREP based on map entities and interactions.
+    """
+    try:
+        # 1. Analyze the map content (Context Awareness)
+        pirate_count = len([e for e in data.entities if e.type == 'PIRACY'])
+        storm_count = len([e for e in data.entities if e.type == 'STORM'])
+        ship_count = len([e for e in data.entities if e.type == 'SHIP'])
+        pol_count = len([e for e in data.entities if e.type == 'POLITICAL'])
+
+        print(f"🧠 NEXUS Analyzing: {len(data.entities)} entities (Risk: {data.global_risk_score})")
+
+        # 2. Enhanced System Prompt
+        system_prompt = f"""
+        You are 'NEXUS', a strategic naval intelligence AI.
+        
+        CONTEXT:
+        - The Commander sees a live map with: {ship_count} Ships, {pirate_count} Pirate Zones, {storm_count} Storms, {pol_count} Political Zones.
+        - GLOBAL RISK SCORE: {data.global_risk_score}/400.
+        
+        INSTRUCTIONS:
+        1. IF RISK IS 0 BUT THREATS EXIST (Pirates/Storms/Zones):
+           - DO NOT say "State of calm" or "No threats".
+           - Instead, say "POTENTIAL THREATS DETECTED" or "VIGILANCE REQUIRED".
+           - Report that while no direct collisions have occurred yet, hostile assets are present in the AO (Area of Operations).
+           
+        2. IF RISK > 0:
+           - Focus on the active collisions and immediate dangers.
+
+        OUTPUT FORMAT (Markdown):
+        ## 🚨 NEXUS SITREP
+        **GLOBAL RISK SCORE:** {data.global_risk_score}/400
+        
+        ### 1. TACTICAL OVERVIEW
+        (Summarize the presence of ships vs threats. Be specific about what is on the map.)
+        
+        ### 2. CRITICAL INTERSECTIONS
+        (If interactions exist, list them. If not, mention the distance/proximity of threats.)
+        
+        ### 3. THREAT PRIORITIZATION
+        (Rank the visible threats even if they haven't hit yet.)
+        
+        ### 4. STRATEGIC RECOMMENDATIONS
+        (Actionable advice: Reroute? Increase speed? Alert crew?)
+        
+        ### 5. PREDICTIVE OUTLOOK
+        """
+        
+        # 3. Pass full entity details so AI knows WHAT is on the map
+        # We simplify the entity list to save tokens but keep names and types
+        user_content = f"""
+        SNAPSHOT DATA:
+        - Active Interactions: {len(data.active_interactions)}
+        - Total Entities: {len(data.entities)}
+        
+        ENTITY LIST (Visible on Map):
+        {json.dumps([{'type': e.type, 'name': e.name} for e in data.entities])}
+        
+        INTERACTION LOG (Active Collisions):
+        {json.dumps([{'desc': i.description, 'severity': i.severityScore} for i in data.active_interactions])}
+        """
+        
+        # 4. Call AI
+        response = await client.chat.completions.create(
+            model=MODEL_ANALYST,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content}
+            ],
+            temperature=0.2,
+            max_tokens=800
+        )
+        
+        # 5. Clean Response
+        analysis = response.choices[0].message.content.strip()
+        if "```markdown" in analysis:
+            analysis = analysis.split("```markdown")[1].split("```")[0].strip()
+        elif "```" in analysis:
+            analysis = analysis.split("```")[1].split("```")[0].strip()
+            
+        return {"analysis": analysis}
+        
+    except Exception as e:
+        print(f"NEXUS ERROR: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

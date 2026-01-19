@@ -1,4 +1,11 @@
-export type EntityType = 'SHIP' | 'ROUTE' | 'STORM' | 'PIRACY' | 'ICE' | 'BLOCKAGE' | 'POLITICAL';
+export type EntityType = 
+  | 'SHIP' 
+  | 'ROUTE' 
+  | 'STORM' 
+  | 'PIRACY' 
+  | 'ICE' 
+  | 'BLOCKAGE' 
+  | 'POLITICAL';
 
 export interface GeoPoint {
   lat: number;
@@ -17,11 +24,13 @@ export interface MaritimeEntity {
   severity: 'LOW' | 'MODERATE' | 'CRITICAL';
   
   // Extensible Attributes
+  // ✅ UPDATE: Added index signature to allow dynamic AI properties
   attributes: {
     windSpeed?: number;      
     cargoValue?: number;     
     flagState?: string;      
     sanctionedBy?: string[]; 
+    [key: string]: any; // <--- Allows extra custom properties (Critical for Situation Room)
   };
 }
 
