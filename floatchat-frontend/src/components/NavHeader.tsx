@@ -10,13 +10,12 @@ export default function NavHeader() {
     // ✅ Added 'z-50' to ensure it stays on top
     <header className="fixed top-0 left-0 w-full z-50 flex items-center justify-between px-6 h-20 bg-slate-950/80 backdrop-blur-md border-b border-white/10 pointer-events-none">
       
-      {/* 1. BRANDING - Fixed Overlap */}
+      {/* 1. BRANDING */}
       <div className="flex items-center gap-4 pointer-events-auto">
         <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center shadow-[0_0_20px_rgba(37,99,235,0.5)] shrink-0">
           <span className="text-2xl">⚓</span>
         </div>
         
-        {/* ✅ FIXED: Added 'flex-col' to stack text properly */}
         <div className="flex flex-col justify-center">
           <h1 className="text-white font-bold tracking-wider text-xl leading-none">
             FLOAT<span className="text-blue-400">CHAT</span>
@@ -50,7 +49,7 @@ export default function NavHeader() {
           🚨 WAR ROOM
         </Link>
 
-        {/* ✅ NEW LINK 3: SITUATION ROOM */}
+        {/* LINK 3: SITUATION ROOM */}
         <Link 
           href="/situation-room" 
           className={`px-5 py-2 rounded-full text-xs font-bold transition-all flex items-center gap-2 whitespace-nowrap ${
@@ -60,12 +59,22 @@ export default function NavHeader() {
           🧠 SITUATION ROOM
         </Link>
 
+        {/* ✅ LINK 4: MARINE BIO (NEW) */}
+        <Link 
+          href="/ecology" 
+          className={`px-5 py-2 rounded-full text-xs font-bold transition-all flex items-center gap-2 whitespace-nowrap ${
+            pathname === '/ecology' ? 'bg-teal-600 text-white shadow-[0_0_15px_rgba(13,148,136,0.5)]' : 'text-gray-400 hover:text-teal-400 hover:bg-teal-900/10'
+          }`}
+        >
+          🦈 MARINE BIO
+        </Link>
+
       </nav>
 
       {/* 3. STATUS & ACTIONS */}
       <div className="flex gap-6 items-center pointer-events-auto">
         
-        {/* ✅ SHOW PLANNER BUTTON (Only on Live Ops page) */}
+        {/* SHOW PLANNER BUTTON (Only on Live Ops page) */}
         {pathname === '/' && (
             <button 
               onClick={() => window.dispatchEvent(new CustomEvent('TOGGLE_PLANNER'))}
