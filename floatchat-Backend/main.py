@@ -5,34 +5,42 @@ import asyncio
 import random
 import certifi
 import httpx
+from contextlib import asynccontextmanager
+from datetime import datetime
 from functools import lru_cache
-from typing import Optional, Dict, Any, Tuple, List
+from typing import Dict, Any, List, Tuple, Optional
 
 # FASTAPI
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse  # ADD THIS IMPORT
-from datetime import datetime
+from fastapi.responses import JSONResponse
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 # EXTERNAL LIBS
 from dotenv import load_dotenv
 from geopy.geocoders import Nominatim
+from geopy.extra.rate_limiter import RateLimiter
 from openai import AsyncOpenAI
 
-# --------------------------------------------------
-# 1. CONFIGURATION & SETUP
-# --------------------------------------------------
-# SSL Fix for Windows
 os.environ["SSL_CERT_FILE"] = certifi.where()
-
 load_dotenv()
+
+
+# Lifecycle Manager
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("🚀 Marine Knowledge Engine API starting up...")
+    print(f"📊 Model: {MODEL_ANALYST}")
+    print(f"🔧 Version: 5.0.0 (Full Suite Enabled)")
+    yield
+    print("🛑 Shutting down...")
 
 app = FastAPI(
     title="Marine Knowledge Engine API",
-    version="4.1.0",
-    description="Comprehensive marine species data, occurrence mapping, and habitat suitability analysis"
+    version="5.0.0",
+    description="Unified API for Marine Biology, Climate Simulation, and Naval Intelligence.",
+    lifespan=lifespan
 )
 
 app.add_middleware(
@@ -44,16 +52,19 @@ app.add_middleware(
 
 # Initialize Async Client
 client = AsyncOpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=os.getenv("OPENROUTER_API_KEY"),
+    base_url=os.getenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1"),
+    api_key=os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY"),
     default_headers={
         "HTTP-Referer": "http://localhost:3000",
         "X-Title": "MarineKnowledgeEngine"
     }
 )
 
-# Initialize Free Geocoder
-geolocator = Nominatim(user_agent="marine_knowledge_engine_v4")
+# Initialize Free Geocoder (Rate: 1 req/sec max)
+
+
+geolocator = Nominatim(user_agent="marine_knowledge_engine_v5")
+geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1)
 
 # Models
 MODEL_CHATBOT = "meta-llama/llama-3.3-70b-instruct:free"
@@ -120,28 +131,32 @@ class SituationSnapshot(BaseModel):
 class SpeciesQuery(BaseModel):
     query: str = Field(..., min_length=1, description="Species name or query")
     
-    @validator('query')
+    @field_validator('query')
+    @classmethod
     def validate_query_length(cls, v):
         if len(v.strip()) < 2:
             raise ValueError('Query must be at least 2 characters')
         return v.strip()
 
-class SuitabilityQuery(BaseModel):
-    species_temp_str: str = Field(..., description="Temperature range string, e.g., '10°C - 25°C'")
-    lat: float = Field(..., ge=-90, le=90, description="Latitude")
-    lng: float = Field(..., ge=-180, le=180, description="Longitude")
-    
-    @validator('species_temp_str')
-    def validate_temp_str(cls, v):
-        if not v or len(v.strip()) < 3:
-            raise ValueError('Temperature string must be provided')
-        return v.strip()
 
 class SpeciesMapResponse(BaseModel):
     scientific_name: str
     count: int
-    points: list
+    points: List[Dict[str, Any]]  # Changed to List for proper typing
     error: Optional[str] = None
+
+class SuitabilityQuery(BaseModel):
+    species_temp_str: str = Field(..., description="Temperature range string")
+    lat: float = Field(..., ge=-90, le=90, description="Latitude")
+    lng: float = Field(..., ge=-180, le=180, description="Longitude")
+    temp_offset: float = Field(0.0, description="Simulation offset in Celsius")
+    
+    @field_validator('species_temp_str')
+    @classmethod
+    def validate_temp_str(cls, v):
+        if not v or len(v.strip()) < 3:
+            raise ValueError('Temperature string must be provided')
+        return v.strip()
 
 class SpeciesInfoResponse(BaseModel):
     scientific_name: str
@@ -157,6 +172,11 @@ class SuitabilityResponse(BaseModel):
     status: str
     score: str
     live_temp: float
+    simulated_temp: float
+    temp_offset: float
+    live_waves: float
+    live_wind: float
+    season: str
     bio_range: str
     reason: str
     factors: Optional[Dict[str, Any]] = None
@@ -180,18 +200,10 @@ current_mission = {
 # --------------------------------------------------
 # 3. IMPROVED HELPER FUNCTIONS
 # --------------------------------------------------
-
 @lru_cache(maxsize=128)
 def parse_temp_range(temp_str: str) -> Tuple[float, float, str]:
-    """
-    Robustly extracts min/max temps from strings like '10-25C' or '10°C - 25°C'
-    Returns: (min_temp, max_temp, formatted_range_string)
-    """
     try:
-        # Remove non-numeric characters except dots, minus signs, and spaces
         clean_str = re.sub(r'[^0-9\.\-\s]', '', temp_str)
-        
-        # Find ALL numbers (integers or floats)
         numbers = re.findall(r"[-+]?\d*\.\d+|[-+]?\d+", clean_str)
         nums = [float(n) for n in numbers]
         
@@ -199,65 +211,38 @@ def parse_temp_range(temp_str: str) -> Tuple[float, float, str]:
             min_temp, max_temp = min(nums), max(nums)
             formatted = f"{min_temp}°C - {max_temp}°C"
         elif len(nums) == 1:
-            min_temp = nums[0] - 5
-            max_temp = nums[0] + 5
+            min_temp, max_temp = nums[0] - 5, nums[0] + 5
             formatted = f"{min_temp:.1f}°C - {max_temp:.1f}°C"
         else:
-            min_temp, max_temp = 10.0, 25.0  # Default fallback for marine species
+            min_temp, max_temp = 10.0, 25.0
             formatted = "10°C - 25°C"
         
         return min_temp, max_temp, formatted
     except Exception as e:
-        print(f"⚠️ Temperature parsing error for '{temp_str}': {e}")
+        print(f"⚠️ Temp Parse Error: {e}")
         return 10.0, 25.0, "10°C - 25°C"
 
 def extract_clean_json(raw_text: str) -> Optional[Dict[str, Any]]:
-    """
-    Robustly cleans AI output to extract valid JSON.
-    Handles Markdown, 'Thinking' tags, and trailing commas.
-    """
     try:
         text = raw_text.strip()
-        
-        # Remove <think> tags (Common in reasoning models)
         text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
 
-        # Remove Markdown Code Blocks
         if "```json" in text:
-            parts = text.split("```json")
-            if len(parts) > 1:
-                text = parts[1].split("```")[0].strip()
+            text = text.split("```json")[1].split("```")[0].strip()
         elif "```" in text:
-            parts = text.split("```")
-            for part in parts:
-                part = part.strip()
-                if part.startswith("{"):
-                    text = part
-                    break
+            text = text.split("```")[1].split("```")[0].strip()
         
-        # Find JSON bounds
         start = text.find("{")
         end = text.rfind("}")
-        
         if start != -1 and end != -1:
             clean_text = text[start : end + 1]
-            # Fix common JSON issues
-            clean_text = re.sub(r',\s*}', '}', clean_text)
-            clean_text = re.sub(r',\s*]', ']', clean_text)
-            # Fix unquoted keys
-            clean_text = re.sub(r'(\w+):', r'"\1":', clean_text)
-            
-            try:
-                return json.loads(clean_text)
-            except json.JSONDecodeError as e:
-                # Try to fix more issues
-                clean_text = re.sub(r'(\w+)\s*:\s*"', r'"\1": "', clean_text)
-                return json.loads(clean_text)
-        
+            return json.loads(clean_text)
+        return None
+    except json.JSONDecodeError as e:
+        print(f"⚠️ JSON Parse Error: {e}")
         return None
     except Exception as e:
         print(f"⚠️ JSON Cleanup Failed: {e}")
-        print(f"Raw text was: {raw_text[:500]}...")
         return None
 
 def get_location_coordinates(query: str) -> Optional[Dict[str, float]]:
@@ -271,7 +256,6 @@ def get_location_coordinates(query: str) -> Optional[Dict[str, float]]:
     except Exception as e:
         print(f"⚠️ Geocoding Error: {e}")
     return None
-
 async def get_live_marine_data(lat: float, lng: float) -> Dict[str, float]:
     """
     Fetches REAL marine data from Open-Meteo with improved error handling.
@@ -291,11 +275,18 @@ async def get_live_marine_data(lat: float, lng: float) -> Dict[str, float]:
             data = resp.json()
             
             if "current" in data:
+                # --- CHANGE START: Check for None values (Land coordinates) ---
+                temp = data["current"].get("temperature_2m")
+                
+                if temp is None:
+                    raise ValueError("Location is on land (API returned null)")
+                # --- CHANGE END ---
+
                 return {
-                    "temp": data["current"].get("temperature_2m", 0.0),
-                    "wave_height": data["current"].get("wave_height", 0.0),
-                    "wind_wave": data["current"].get("wind_wave_height", 0.0),
-                    "wind_speed": data["current"].get("wind_speed_10m", 0.0)
+                    "temp": float(temp),
+                    "wave_height": float(data["current"].get("wave_height") or 0.0),
+                    "wind_wave": float(data["current"].get("wind_wave_height") or 0.0),
+                    "wind_speed": float(data["current"].get("wind_speed_10m") or 0.0)
                 }
             else:
                 raise ValueError("No current data in response")
@@ -317,8 +308,7 @@ async def get_live_marine_data(lat: float, lng: float) -> Dict[str, float]:
         "wind_wave": 0.5 + random.uniform(-0.2, 0.2),
         "wind_speed": 5.0 + random.uniform(-3, 3)
     }
-
-async def get_live_wave_data(lat, lng):
+async def get_live_wave_data(lat: float, lng: float) -> Dict[str, float]:
     """
     Fetches REAL wave height and wind speed from Open-Meteo.
     """
@@ -331,8 +321,8 @@ async def get_live_wave_data(lat, lng):
             "timezone": "auto"
         }
         
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(url, params=params, timeout=2.0)
+        async with httpx.AsyncClient() as http_client:
+            resp = await http_client.get(url, params=params, timeout=2.0)
             data = resp.json()
             
             if "current" in data:
@@ -346,12 +336,12 @@ async def get_live_wave_data(lat, lng):
     return {"wave_height": 0.5, "wind_wave": 0.2}
 
 # --------------------------------------------------
-# 4. CORE ENDPOINTS
+# 5. MARINE BIOLOGY ENDPOINTS (PHASE 4/5)
 # --------------------------------------------------
 
 @app.get("/")
 async def root():
-    return {"status": "Marine Knowledge Engine Online", "version": "4.1.0"}
+    return {"status": "Marine Knowledge Engine Online", "version": "4.2.0"}
 
 @app.post("/chat")
 async def chat_bot(data: ChatRequest):
@@ -831,347 +821,292 @@ async def analyze_situation(data: SituationSnapshot):
 
 @app.post("/species-info", response_model=SpeciesInfoResponse)
 async def get_species_info(data: SpeciesQuery):
-    """
-    PHASE 1: Pure Species Knowledge (Biology + Habitat).
-    """
     try:
-        print(f"🔍 Species Query: {data.query}")
-
-        system_prompt = """You are an AI Marine Ecology Assistant specialized in oceanography and marine biodiversity.
-
-YOUR ROLE:
-Provide scientifically grounded, data-backed explanations about marine species.
-
-STRICT RULES:
-1. Do NOT make predictions about future population or movement.
-2. Do NOT speculate beyond standard biological data (FishBase/OBIS).
-3. Explain "Why" using physical oceanography (temp, depth, salinity) + ecology.
-4. If data is insufficient, state clearly: "Data not available."
-5. Return valid JSON with exactly these fields.
-
-OUTPUT FORMAT (JSON ONLY):
-{
-  "scientific_name": "Genus species",
-  "common_name": "Common Name",
-  "habitat_type": "Pelagic, Reef-associated, Benthic",
-  "depth_range": "0 - 200m",
-  "temperature_preference": "10°C - 25°C",
-  "educational_brief": "2-3 sentence student-friendly summary.",
-  "detailed_explanation": "Full scientific explanation"
-}
-
-IMPORTANT: If the query is unclear or species is unknown, use "Unknown" for scientific_name."""
+        system_prompt = """You are a Marine Biologist. 
+        Return strictly valid JSON with fields: scientific_name, common_name, habitat_type, depth_range, temperature_preference, educational_brief, detailed_explanation."""
 
         response = await client.chat.completions.create(
             model=MODEL_ANALYST,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Provide information about: {data.query}"}
+                {"role": "user", "content": f"Info for: {data.query}"}
             ],
-            temperature=0.3,
-            max_tokens=1500
+            temperature=0.3
         )
-
-        raw_output = response.choices[0].message.content
-        clean_json = extract_clean_json(raw_output)
-
-        if not clean_json:
-            return SpeciesInfoResponse(
-                scientific_name="Unknown",
-                common_name="Unknown",
-                habitat_type="Data not available",
-                depth_range="Data not available",
-                temperature_preference="Data not available",
-                educational_brief="Unable to retrieve specific data for this query.",
-                detailed_explanation="The system could not parse information for this species. Please try a more specific scientific name or common name."
-            )
-
-        # Validate required fields exist
-        required_fields = [
-            "scientific_name", "common_name", "habitat_type", 
-            "depth_range", "temperature_preference", 
-            "educational_brief", "detailed_explanation"
-        ]
         
-        for field in required_fields:
-            if field not in clean_json:
-                clean_json[field] = "Data not available"
-
+        clean_json = extract_clean_json(response.choices[0].message.content)
+        if not clean_json: raise ValueError("Failed to parse JSON")
+        
+        # Ensure defaults
+        for k in ["scientific_name", "common_name", "habitat_type"]:
+            if k not in clean_json: clean_json[k] = "Unknown"
+            
         return SpeciesInfoResponse(**clean_json)
 
     except Exception as e:
-        print(f"❌ ECOLOGY ERROR: {e}")
         return SpeciesInfoResponse(
-            scientific_name="System Error",
-            common_name="System Error",
-            habitat_type="Unavailable",
-            depth_range="Unavailable",
-            temperature_preference="Unavailable",
-            educational_brief="Unable to retrieve data due to system error.",
-            detailed_explanation=f"System error occurred: {str(e)[:200]}",
-            error=str(e)
+            scientific_name="Error", common_name="Error", habitat_type="N/A", depth_range="N/A",
+            temperature_preference="N/A", educational_brief="Error", detailed_explanation=str(e), error=str(e)
         )
-
 @app.post("/species-map", response_model=SpeciesMapResponse)
 async def get_species_map(data: SpeciesQuery):
     """
-    PHASE 2: Real-world occurrence data from OBIS.
-    Only runs for VALID species-level queries.
+    Fetch species occurrence data from OBIS and return formatted map points.
     """
     try:
-        print(f"🗺️ Fetching OBIS Map Data for: {data.query}")
+        print(f"🔍 Searching for species: {data.query}")
+        
+        # 1. First, get scientific name from AI
+        name_prompt = f"""Extract the specific scientific name for '{data.query}'. 
+        
+Rules:
+- If it's already a scientific name (e.g., "Aurelia aurita"), return it as-is
+- If it's a common name (e.g., "Great White Shark"), return the scientific name
+- If too generic or unknown, return exactly: UNKNOWN
+- Return ONLY the scientific name, nothing else
 
-        # --- STEP 1: Extract scientific name using AI ---
-        name_prompt = f"""Extract ONLY the most specific marine species scientific name from this query.
-If uncertain or if it's not a specific species, return: UNKNOWN
 
-Query: {data.query}
-Output: (only the scientific name or UNKNOWN)"""
-
+Examples:
+- "jellyfish" -> UNKNOWN (too generic)
+- "moon jellyfish" -> Aurelia aurita
+- "Aurelia aurita" -> Aurelia aurita
+- "great white shark" -> Carcharodon carcharias
+"""
+        
         name_res = await client.chat.completions.create(
             model=MODEL_ANALYST,
             messages=[{"role": "user", "content": name_prompt}],
             temperature=0.1,
             max_tokens=50
         )
-
+        
         scientific_name = name_res.choices[0].message.content.strip()
-        print(f"🔬 Extracted Scientific Name: '{scientific_name}'")
-
-        # --- STEP 2: Validate species format ---
-        if (scientific_name == "UNKNOWN" or 
-            scientific_name.count(" ") != 1 or
-            len(scientific_name) < 3):
-            
-            print("⚠️ Not a valid species-level query.")
+        print(f"📋 AI identified scientific name: {scientific_name}")
+        
+        # Check if species is too generic
+        if "UNKNOWN" in scientific_name.upper() or len(scientific_name) < 3:
             return SpeciesMapResponse(
                 scientific_name="Unknown",
                 count=0,
                 points=[],
-                error="Query is not specific to a single species. Please use a scientific name like 'Aurelia aurita'."
+                error="Species name too generic. Please use a specific scientific name (e.g., 'Aurelia aurita')."
             )
 
-        # --- STEP 3: Query OBIS with retry logic ---
+
+        # 2. Query OBIS API
         obis_url = "https://api.obis.org/v3/occurrence"
         params = {
             "scientificname": scientific_name,
-            "size": 500,
-            "hasextensions": "true",
-            "geometry": "bbox[-180,-90,180,90]"
+            "size": 500,  # Increased limit
+            "offset": 0,
+            "fields": "decimalLatitude,decimalLongitude,eventDate,institutionCode,datasetName"
         }
-
-        points = []
-        max_retries = 2
         
-        for attempt in range(max_retries):
-            try:
-                async with httpx.AsyncClient(timeout=10.0) as http_client:
-                    resp = await http_client.get(obis_url, params=params)
-                    
-                    if resp.status_code == 429:  # Rate limited
-                        wait_time = (attempt + 1) * 2
-                        print(f"⏳ OBIS rate limited, waiting {wait_time}s...")
-                        await asyncio.sleep(wait_time)
-                        continue
-                    
-                    resp.raise_for_status()
-                    raw_data = resp.json()
-                    break
-                    
-            except (httpx.TimeoutException, httpx.ConnectError) as e:
-                if attempt == max_retries - 1:
-                    print(f"❌ OBIS connection failed after {max_retries} attempts: {e}")
-                    return SpeciesMapResponse(
-                        scientific_name=scientific_name,
-                        count=0,
-                        points=[],
-                        error="OBIS database is temporarily unavailable."
-                    )
-                await asyncio.sleep(1 * (attempt + 1))
-                continue
+        print(f"📡 Querying OBIS with params: {params}")
+        
+        async with httpx.AsyncClient(timeout=15.0) as http_client:
+            headers = {
+                "User-Agent": "MarineKnowledgeEngine/5.0 (Educational; contact@example.com)",
+                "Accept": "application/json"
+            }
+            
+            resp = await http_client.get(obis_url, params=params, headers=headers)
+            
+            print(f"📥 OBIS Response Status: {resp.status_code}")
+            
+            if resp.status_code == 404:
+                return SpeciesMapResponse(
+                    scientific_name=scientific_name,
+                    count=0,
+                    points=[],
+                    error=f"No OBIS records found for '{scientific_name}'. This species may not be in the database."
+                )
+            
+            if resp.status_code != 200:
+                print(f"❌ OBIS API Error: {resp.status_code} - {resp.text}")
+                return SpeciesMapResponse(
+                    scientific_name=scientific_name,
+                    count=0,
+                    points=[],
+                    error=f"OBIS API returned status {resp.status_code}. Please try again later."
+                )
+            
+            data_json = resp.json()
+            results = data_json.get("results", [])
+            total_count = data_json.get("total", len(results))
+            
+            print(f"✅ OBIS returned {len(results)} results (total: {total_count})")
 
-        results = raw_data.get("results", [])
-        print(f"📊 OBIS returned {len(results)} records")
 
-        # --- STEP 4: Process and validate points ---
-        valid_count = 0
-        for record in results:
+        # 3. Process and validate points
+        points = []
+        skipped = 0
+        
+        for idx, record in enumerate(results):
             try:
                 lat = record.get("decimalLatitude")
                 lng = record.get("decimalLongitude")
                 
+                # Strict validation
                 if lat is None or lng is None:
-                    continue
-                    
-                lat_float = float(lat)
-                lng_float = float(lng)
-                
-                # Validate coordinates are on Earth
-                if not (-90 <= lat_float <= 90 and -180 <= lng_float <= 180):
+                    skipped += 1
                     continue
                 
-                # Generate color based on record age if available
-                color = "#00ffcc"  # Default teal
+                lat = float(lat)
+                lng = float(lng)
+                
+                # Validate coordinates
+                if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+                    skipped += 1
+                    continue
+                
+                if lat == 0 and lng == 0:  # Skip null island
+                    skipped += 1
+                    continue
+                
+                # Color based on date
                 event_date = record.get("eventDate", "")
+                year = None
                 if event_date:
                     try:
                         year = int(event_date[:4])
-                        current_year = datetime.now().year
-                        if year < current_year - 10:
-                            color = "#ff9900"  # Orange for old records
-                        elif year < current_year - 5:
-                            color = "#ffff00"  # Yellow for medium age
                     except:
                         pass
-
-                points.append({
-                    "lat": lat_float,
-                    "lng": lng_float,
-                    "label": f"{scientific_name} - {event_date[:10] if event_date else 'Date unknown'}",
-                    "color": color,
-                    "type": "occurrence"
-                })
-                valid_count += 1
                 
-            except (ValueError, TypeError) as e:
+                current_year = datetime.now().year
+                if year and year >= current_year - 5:
+                    color = "#00ffcc"  # Recent (cyan)
+                elif year and year >= current_year - 20:
+                    color = "#3b82f6"  # Medium (blue)
+                else:
+                    color = "#ff9900"  # Old (orange)
+                
+                points.append({
+                    "lat": round(lat, 6),
+                    "lng": round(lng, 6),
+                    "color": color,
+                    "label": f"{scientific_name}",
+                    "type": "observation",
+                    "details": {
+                        "date": event_date or "Unknown",
+                        "dataset": record.get("datasetName", "OBIS"),
+                        "institution": record.get("institutionCode", "Unknown"),
+                        "year": year
+                    }
+                })
+                
+            except Exception as e:
+                print(f"⚠️ Error processing record {idx}: {e}")
+                skipped += 1
                 continue
-
-        print(f"✅ Processed {valid_count} valid points")
+        
+        print(f"✅ Processed {len(points)} valid points (skipped {skipped} invalid)")
+        
+        if len(points) == 0:
+            return SpeciesMapResponse(
+                scientific_name=scientific_name,
+                count=0,
+                points=[],
+                error=f"Found {total_count} OBIS records but all had invalid coordinates. Try a different species."
+            )
         
         return SpeciesMapResponse(
             scientific_name=scientific_name,
-            count=valid_count,
-            points=points[:300]  # Limit for performance
+            count=total_count,
+            points=points,
+            error=None
         )
 
-    except Exception as e:
-        print(f"❌ OBIS ERROR: {e}")
+
+    except httpx.TimeoutException:
+        print("⏱️ OBIS API Timeout")
         return SpeciesMapResponse(
-            scientific_name="Error",
+            scientific_name=data.query,
             count=0,
             points=[],
-            error=f"Failed to retrieve occurrence data: {str(e)}"
+            error="OBIS API timeout. The database might be slow. Please try again."
+        )
+    
+    except Exception as e:
+        print(f"❌ Unexpected error in /species-map: {type(e).__name__}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
+        return SpeciesMapResponse(
+            scientific_name=data.query,
+            count=0,
+            points=[],
+            error=f"System error: {str(e)}"
         )
 
 @app.post("/analyze-suitability", response_model=SuitabilityResponse)
 async def analyze_suitability(data: SuitabilityQuery):
-    """
-    PHASE 3: Habitat Suitability Analysis.
-    """
     try:
-        print(f"🌡️ Analyzing habitat suitability at {data.lat:.2f}, {data.lng:.2f}")
-        print(f"📊 Species temperature preference: {data.species_temp_str}")
+        print(f"🌡️ Analyzing Env at {data.lat:.2f}, {data.lng:.2f} (Offset: +{data.temp_offset}°C)")
 
-        # 1. Parse temperature range with improved function
+        # 1. Parse Limits
         min_temp, max_temp, bio_range = parse_temp_range(data.species_temp_str)
-        print(f"📈 Parsed range: {bio_range} ({min_temp:.1f}°C to {max_temp:.1f}°C)")
 
-        # 2. Get LIVE marine conditions
+        # 2. Get LIVE Conditions (Phase 4)
         marine_data = await get_live_marine_data(data.lat, data.lng)
         live_temp = marine_data["temp"]
-        live_waves = marine_data["wave_height"]
-        live_wind = marine_data["wind_speed"]
         
-        print(f"🌊 Live conditions: {live_temp:.1f}°C, {live_waves:.1f}m waves, {live_wind:.1f} m/s wind")
+        # 3. Apply Simulation (Phase 5)
+        simulated_temp = live_temp + data.temp_offset
+        is_simulation = data.temp_offset > 0
 
-        # 3. Calculate seasonality
+        # 4. Seasonality (Phase 4)
         month = datetime.now().month
         is_north = data.lat > 0
+        if month in [12, 1, 2]: season = "Winter (N)" if is_north else "Summer (S)"
+        elif month in [6, 7, 8]: season = "Summer (N)" if is_north else "Winter (S)"
+        else: season = "Transition"
+
+        # 5. Score Calculation (on SIMULATED temp)
+        score = "LOW"
+        if min_temp <= simulated_temp <= max_temp: score = "HIGH"
+        elif abs(simulated_temp - min_temp) < 4 or abs(simulated_temp - max_temp) < 4: score = "MEDIUM"
+
+        # 6. AI Insight
+        sim_context = f"SIMULATED FUTURE (+{data.temp_offset}°C)" if is_simulation else "LIVE CONDITIONS"
+        context_prompt = f"""
+        Act as Marine Ecologist. Analyze {sim_context}:
+        - Species Needs: {min_temp}-{max_temp}°C
+        - Water Temp: {simulated_temp:.1f}°C (Base: {live_temp:.1f})
+        - Waves: {marine_data['wave_height']}m, Wind: {marine_data['wind_speed']}kph
+        - Season: {season}
         
-        if month in [12, 1, 2]:
-            season = "Winter (N)" if is_north else "Summer (S)"
-        elif month in [3, 4, 5]:
-            season = "Spring (N)" if is_north else "Autumn (S)"
-        elif month in [6, 7, 8]:
-            season = "Summer (N)" if is_north else "Winter (S)"
-        else:
-            season = "Autumn (N)" if is_north else "Spring (S)"
-
-        # 4. Calculate suitability score with more nuance
-        temp_diff_min = abs(live_temp - min_temp)
-        temp_diff_max = abs(live_temp - max_temp)
-        
-        if min_temp <= live_temp <= max_temp:
-            if temp_diff_min < 2 or temp_diff_max < 2:  # Near optimal
-                score = "HIGH"
-            else:  # Within range but not optimal
-                score = "MEDIUM"
-        elif min_temp - 3 <= live_temp <= max_temp + 3:  # Within tolerance
-            score = "MEDIUM"
-        else:
-            score = "LOW"
-
-        # 5. Consider wave and wind conditions
-        factors = {
-            "temperature": {
-                "value": live_temp,
-                "optimal_min": min_temp,
-                "optimal_max": max_temp,
-                "score": score,
-                "impact": "high"
-            },
-            "waves": {
-                "value": live_waves,
-                "optimal_max": 3.0,
-                "score": "HIGH" if live_waves < 2.0 else "MEDIUM" if live_waves < 4.0 else "LOW",
-                "impact": "medium"
-            },
-            "season": {
-                "value": season,
-                "optimal": "Species-dependent",
-                "impact": "low"
-            }
-        }
-
-        # 6. Generate intelligent reasoning
-        context_prompt = f"""As a Marine Ecologist, analyze habitat suitability:
-
-SPECIES TEMPERATURE PREFERENCE: {min_temp:.1f}°C to {max_temp:.1f}°C
-CURRENT CONDITIONS:
-- Sea Surface Temperature: {live_temp:.1f}°C
-- Wave Height: {live_waves:.1f} meters
-- Wind Speed: {live_wind:.1f} m/s
-- Season: {season}
-- Location: {data.lat:.2f}°N, {data.lng:.2f}°E
-
-TASK: Write ONE concise sentence explaining suitability.
-Consider:
-1. Is temperature within preferred range?
-2. Are waves/wind conditions favorable?
-3. Is this typical season for the species?
-
-Output should be clear, scientific, and under 20 words."""
+        TASK: Write ONE short sentence explaining the suitability score ({score}). 
+        If simulated, mention thermal impact.
+        """
 
         ai_res = await client.chat.completions.create(
             model=MODEL_ANALYST,
             messages=[{"role": "user", "content": context_prompt}],
             temperature=0.3,
-            max_tokens=100
+            max_tokens=80
         )
-        
-        reason = ai_res.choices[0].message.content.strip()
-        if len(reason) > 200:  # Truncate if too long
-            reason = reason[:197] + "..."
+        reason = ai_res.choices[0].message.content.strip().replace('"', '')
 
-        # 7. Return complete response WITH bio_range
         return SuitabilityResponse(
             status="success",
             score=score,
             live_temp=round(live_temp, 1),
-            bio_range=bio_range,  # FIXED: Now included
+            simulated_temp=round(simulated_temp, 1),
+            temp_offset=data.temp_offset,
+            live_waves=marine_data['wave_height'],
+            live_wind=marine_data['wind_speed'],
+            season=season,
+            bio_range=bio_range,
             reason=reason,
-            factors=factors
+            factors={"waves": "High" if marine_data['wave_height'] > 2 else "Low"}
         )
 
     except Exception as e:
-        print(f"❌ SUITABILITY ANALYSIS ERROR: {e}")
+        print(f"Error: {e}")
         return SuitabilityResponse(
-            status="error",
-            score="UNKNOWN",
-            live_temp=0.0,
-            bio_range="Unknown",
-            reason="Analysis failed due to technical error.",
-            error=str(e)
+            status="error", score="UNKNOWN", live_temp=0, simulated_temp=0, temp_offset=0,
+            live_waves=0, live_wind=0, season="N/A", bio_range="N/A", reason="System Error", error=str(e)
         )
 
 # --------------------------------------------------
@@ -1195,7 +1130,6 @@ async def health_check():
             "/ocean-data"
         ]
     }
-
 @app.get("/api-status")
 async def api_status():
     """Check status of external APIs."""
@@ -1214,34 +1148,37 @@ async def api_status():
             max_tokens=1
         )
         status["openrouter"] = "healthy"
-    except:
+    except Exception as e:
+        print(f"⚠️ OpenRouter health check failed: {e}")
         status["openrouter"] = "unhealthy"
     
     try:
         # Test OBIS
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get("https://api.obis.org/v3")
+        async with httpx.AsyncClient(timeout=5.0) as http_client:
+            resp = await http_client.get("https://api.obis.org/v3")
             status["obis"] = "healthy" if resp.status_code == 200 else "unhealthy"
-    except:
+    except Exception as e:
+        print(f"⚠️ OBIS health check failed: {e}")
         status["obis"] = "unhealthy"
     
     try:
         # Test Marine API
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get("https://marine-api.open-meteo.com/v1/marine?latitude=0&longitude=0&current=temperature_2m")
+        async with httpx.AsyncClient(timeout=5.0) as http_client:
+            resp = await http_client.get("https://marine-api.open-meteo.com/v1/marine?latitude=0&longitude=0&current=temperature_2m")
             status["marine_api"] = "healthy" if resp.status_code == 200 else "unhealthy"
-    except:
+    except Exception as e:
+        print(f"⚠️ Marine API health check failed: {e}")
         status["marine_api"] = "unhealthy"
     
     try:
         # Test Geocoder
-        location = geolocator.geocode("London", timeout=5)
+        location = geocode("London")
         status["geocoder"] = "healthy" if location else "unhealthy"
-    except:
+    except Exception as e:
+        print(f"⚠️ Geocoder health check failed: {e}")
         status["geocoder"] = "unhealthy"
     
     return status
-
 @app.get("/system-stats")
 async def system_stats():
     """Get system statistics."""
@@ -1294,50 +1231,10 @@ async def test_species_endpoint(species_name: str):
         }
 
 # --------------------------------------------------
-# 8. ERROR HANDLING
+# 6. EXCEPTION HANDLING
 # --------------------------------------------------
-
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request, exc):
-    """Handle HTTP exceptions uniformly."""
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "error": exc.detail,
-            "status": "error",
-            "timestamp": datetime.now().isoformat()
-        }
-    )
 
 @app.exception_handler(Exception)
-async def general_exception_handler(request, exc):
-    """Handle general exceptions."""
-    print(f"❌ Unhandled exception: {exc}")
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": "Internal server error",
-            "status": "error",
-            "timestamp": datetime.now().isoformat()
-        }
-    )
-
-# --------------------------------------------------
-# 9. STARTUP EVENT
-# --------------------------------------------------
-
-@app.on_event("startup")
-async def startup_event():
-    """Run on startup."""
-    print("🚀 Marine Knowledge Engine API starting up...")
-    print(f"📊 Model: {MODEL_ANALYST}")
-    print(f"🌐 CORS: Enabled")
-    print(f"🔧 Version: 4.1.0")
-
-# --------------------------------------------------
-# 10. MAIN EXECUTION
-# --------------------------------------------------
-# 
-# if __name__ == "__main__":
-    # import uvicorn
-    # uvicorn.run(app, host="0.0.0.0", port=8000)
+async def global_exception_handler(request, exc):
+    print(f"❌ Global Error: {exc}")
+    return JSONResponse(status_code=500, content={"error": str(exc)})

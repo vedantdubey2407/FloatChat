@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 
-// Dynamic import with SSR disabled to prevent hydration mismatch
 const Globe = dynamic(() => import('react-globe.gl'), { ssr: false });
 
 interface Marker {
@@ -37,17 +36,45 @@ export default function SpeciesGlobe({ markers = [] }: SpeciesGlobeProps) {
   const [isGlobeVisible, setIsGlobeVisible] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   
-  // 1. ROBUST RESIZING
+  // Helper function to format coordinates with N/S/E/W
+  const formatCoordinate = (lat: number, lng: number) => {
+    const latDir = lat >= 0 ? 'N' : 'S';
+    const lngDir = lng >= 0 ? 'E' : 'W';
+    return {
+      lat: `${Math.abs(lat).toFixed(2)}°${latDir}`,
+      lng: `${Math.abs(lng).toFixed(2)}°${lngDir}`
+    };
+  };
+
+  // 1. ROBUST RESIZING with ResizeObserver guard
   useEffect(() => {
     if (!containerRef.current) return;
+
+    if (typeof ResizeObserver === 'undefined') {
+      // Fallback for browsers without ResizeObserver
+      const updateDimensions = () => {
+        if (containerRef.current) {
+          const { width, height } = containerRef.current.getBoundingClientRect();
+          if (width > 0 && height > 0) {
+            setDimensions({ width, height });
+          }
+        }
+      };
+      
+      updateDimensions();
+      window.addEventListener('resize', updateDimensions);
+      return () => window.removeEventListener('resize', updateDimensions);
+    }
 
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const { width, height } = entry.contentRect;
-        setDimensions((prev) => {
+        if (width > 0 && height > 0) {
+          setDimensions((prev) => {
             if (prev.width === width && prev.height === height) return prev;
             return { width, height };
-        });
+          });
+        }
       }
     });
 
@@ -74,22 +101,22 @@ export default function SpeciesGlobe({ markers = [] }: SpeciesGlobeProps) {
 
   // 3. Initialize Globe Controls
   useEffect(() => {
-    if (!globeEl.current) return;
+    if (!globeEl.current || !isInitialized) return;
     
     const controls = globeEl.current.controls();
     if (controls) {
-        controls.autoRotate = autoRotate;
-        controls.autoRotateSpeed = 0.5;
-        controls.enableDamping = true;
-        controls.dampingFactor = 0.1;
-        controls.minDistance = 200;
-        controls.maxDistance = 4000;
+      controls.autoRotate = autoRotate;
+      controls.autoRotateSpeed = 0.5;
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.1;
+      controls.minDistance = 200;
+      controls.maxDistance = 4000;
     }
   }, [autoRotate, isInitialized]);
 
-  // 4. Auto-Center
+  // 4. Auto-Center when markers change
   useEffect(() => {
-    if (globeEl.current && processedMarkers.length > 0 && dimensions.width > 0) {
+    if (globeEl.current && processedMarkers.length > 0 && dimensions.width > 0 && isInitialized) {
       const avgLat = processedMarkers.reduce((sum, m) => sum + m.lat, 0) / processedMarkers.length;
       const avgLng = processedMarkers.reduce((sum, m) => sum + m.lng, 0) / processedMarkers.length;
       
@@ -97,7 +124,7 @@ export default function SpeciesGlobe({ markers = [] }: SpeciesGlobeProps) {
         globeEl.current.pointOfView({ lat: avgLat, lng: avgLng, altitude: 2.0 }, 2000);
       }, 500);
     }
-  }, [processedMarkers, dimensions]);
+  }, [processedMarkers, dimensions, isInitialized]);
 
   // 5. Handlers
   const handleMarkerClick = useCallback((marker: Marker) => {
@@ -109,7 +136,7 @@ export default function SpeciesGlobe({ markers = [] }: SpeciesGlobeProps) {
 
   const handleGlobeReady = useCallback(() => {
     setIsInitialized(true);
-    setTimeout(() => setIsGlobeVisible(true), 100); 
+    setTimeout(() => setIsGlobeVisible(true), 300);
   }, []);
 
   // Tooltip tracking
@@ -122,6 +149,9 @@ export default function SpeciesGlobe({ markers = [] }: SpeciesGlobeProps) {
     window.addEventListener('mousemove', handleMouseMove);
     return () => window.removeEventListener('mousemove', handleMouseMove);
   }, [hoveredMarker]);
+
+  // Don't render if dimensions are zero
+  const shouldRenderGlobe = dimensions.width > 0 && dimensions.height > 0;
 
   return (
     <div 
@@ -136,35 +166,41 @@ export default function SpeciesGlobe({ markers = [] }: SpeciesGlobeProps) {
         {processedMarkers.length} POINTS {autoRotate ? '• ROTATING' : ''}
       </div>
       
-      {dimensions.width > 0 && dimensions.height > 0 && (
+      {shouldRenderGlobe ? (
         <div className={`w-full h-full transition-opacity duration-700 ${isGlobeVisible ? 'opacity-100' : 'opacity-0'}`}>
-            <Globe
-              ref={globeEl}
-              width={dimensions.width}
-              height={dimensions.height}
-              backgroundColor="rgba(0,0,0,0)"
-              globeImageUrl="//unpkg.com/three-globe/example/img/earth-blue-marble.jpg"
-              bumpImageUrl="//unpkg.com/three-globe/example/img/earth-topology.png"
-              backgroundImageUrl="//unpkg.com/three-globe/example/img/night-sky.png"
-              
-              showAtmosphere={true}
-              atmosphereColor="#3b82f6"
-              atmosphereAltitude={0.15}
-              
-              pointsData={processedMarkers}
-              pointLat="lat"
-              pointLng="lng"
-              pointColor="color"
-              pointRadius="size"
-              pointAltitude="altitude"
-              pointResolution={16}
-              
-              // ✅ FIXED: Explicit type casting for callbacks
-              onPointClick={(point) => handleMarkerClick(point as Marker)}
-              onPointHover={(point) => setHoveredMarker(point as Marker | null)}
-              onGlobeClick={() => setSelectedMarker(null)}
-              onGlobeReady={handleGlobeReady}
-            />
+          <Globe
+            ref={globeEl}
+            width={dimensions.width}
+            height={dimensions.height}
+            backgroundColor="rgba(0,0,0,0)"
+            globeImageUrl="//unpkg.com/three-globe/example/img/earth-blue-marble.jpg"
+            bumpImageUrl="//unpkg.com/three-globe/example/img/earth-topology.png"
+            backgroundImageUrl="//unpkg.com/three-globe/example/img/night-sky.png"
+            
+            showAtmosphere={true}
+            atmosphereColor="#3b82f6"
+            atmosphereAltitude={0.15}
+            
+            pointsData={processedMarkers}
+            pointLat="lat"
+            pointLng="lng"
+            pointColor="color"
+            pointRadius="size"
+            pointAltitude="altitude"
+            pointResolution={16}
+            
+            onPointClick={(point) => handleMarkerClick(point as Marker)}
+            onPointHover={(point) => setHoveredMarker(point as Marker | null)}
+            onGlobeClick={() => setSelectedMarker(null)}
+            onGlobeReady={handleGlobeReady}
+          />
+        </div>
+      ) : (
+        <div className="w-full h-full flex items-center justify-center">
+          <div className="text-center">
+            <div className="w-12 h-12 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin mx-auto mb-4" />
+            <p className="text-sm text-slate-500">Initializing globe...</p>
+          </div>
         </div>
       )}
 
@@ -179,10 +215,14 @@ export default function SpeciesGlobe({ markers = [] }: SpeciesGlobeProps) {
         </button>
         <button
           onClick={() => {
-             if (globeEl.current) globeEl.current.pointOfView({ lat: 0, lng: 0, altitude: 2.5 }, 1000);
+             if (globeEl.current && processedMarkers.length > 0) {
+               const avgLat = processedMarkers.reduce((sum, m) => sum + m.lat, 0) / processedMarkers.length;
+               const avgLng = processedMarkers.reduce((sum, m) => sum + m.lng, 0) / processedMarkers.length;
+               globeEl.current.pointOfView({ lat: avgLat, lng: avgLng, altitude: 2.5 }, 1000);
+             }
           }}
           className="p-2 rounded-lg bg-slate-900/80 backdrop-blur border border-slate-700 text-slate-300 hover:text-white transition-colors"
-          title="Reset View"
+          title="Center View"
         >
           🔄
         </button>
@@ -199,7 +239,7 @@ export default function SpeciesGlobe({ markers = [] }: SpeciesGlobeProps) {
              <span className="text-xs font-bold text-teal-100">Observation</span>
           </div>
           <div className="text-[10px] text-slate-400 font-mono">
-            {hoveredMarker.lat.toFixed(2)}°N, {hoveredMarker.lng.toFixed(2)}°E
+            {formatCoordinate(hoveredMarker.lat, hoveredMarker.lng).lat}, {formatCoordinate(hoveredMarker.lat, hoveredMarker.lng).lng}
           </div>
           {hoveredMarker.details?.date && (
              <div className="text-[10px] text-slate-500 border-t border-white/10 mt-1 pt-1">
@@ -219,11 +259,11 @@ export default function SpeciesGlobe({ markers = [] }: SpeciesGlobeProps) {
           <div className="space-y-1.5 text-xs text-slate-300">
             <div className="flex justify-between border-b border-white/5 pb-1">
                 <span className="text-slate-500">Latitude</span>
-                <span className="font-mono">{selectedMarker.lat.toFixed(4)}</span>
+                <span className="font-mono">{formatCoordinate(selectedMarker.lat, selectedMarker.lng).lat}</span>
             </div>
             <div className="flex justify-between border-b border-white/5 pb-1">
                 <span className="text-slate-500">Longitude</span>
-                <span className="font-mono">{selectedMarker.lng.toFixed(4)}</span>
+                <span className="font-mono">{formatCoordinate(selectedMarker.lat, selectedMarker.lng).lng}</span>
             </div>
             {selectedMarker.details?.date && (
                 <div className="flex justify-between">
@@ -231,12 +271,18 @@ export default function SpeciesGlobe({ markers = [] }: SpeciesGlobeProps) {
                     <span>{selectedMarker.details.date}</span>
                 </div>
             )}
+            {selectedMarker.details?.dataset && (
+                <div className="flex justify-between">
+                    <span className="text-slate-500">Dataset</span>
+                    <span className="text-teal-400">{selectedMarker.details.dataset}</span>
+                </div>
+            )}
           </div>
         </div>
       )}
 
       {/* Loading State */}
-      {!isInitialized && (
+      {!isInitialized && shouldRenderGlobe && (
         <div className="absolute inset-0 flex items-center justify-center bg-slate-950/20 backdrop-blur-[2px] z-40">
            <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
         </div>
