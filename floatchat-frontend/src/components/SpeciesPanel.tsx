@@ -67,28 +67,38 @@ interface MapPoint {
   type?: string;
   details?: any;
 }
-
 interface SuitabilityResult {
   status: string;
-  score: 'HIGH' | 'MEDIUM' | 'LOW';
-  live_temp: number;
-  simulated_temp?: number;
-  temp_offset?: number;
+  score: 'HIGH' | 'MEDIUM' | 'LOW' | 'CRITICAL';
+
+  // ✅ Phase 7 Nested Data
+  env: {
+    live_temp: number;
+    sim_temp: number;
+    sim_ph: number;
+    sim_oxy: number;
+    sim_fish: string;
+    sim_poll: string;
+    year: string;
+    bio_range?: string;
+    season?: string;
+  };
+  // ✅ Phase 7 AI Prediction
+  prediction: {
+    survival_chance: string;
+    population_trend: string;
+    key_risk: string;
+    explanation: string;
+  };
+  // ✅ Backward Compatibility Fields (Fixes your errors)
+  reason?: string;
+  climate_impacts?: string[]; // <--- This line fixes the error
   live_waves?: number;
   live_wind?: number;
   season?: string;
-  bio_range: string;
-  reason: string;
-  factors?: any;
-  climate_impacts?: string[];
-  projected_range?: string;
+  bio_range?: string;
+  error?: string;
 }
-
-interface ApiError {
-  message: string;
-  status?: number;
-}
-
 export default function SpeciesPanel() {
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
@@ -106,6 +116,9 @@ export default function SpeciesPanel() {
   const [exporting, setExporting] = useState(false);
   const [timeRange, setTimeRange] = useState<'all' | 'recent' | 'historical'>('all');
   const [debounceTimer, setDebounceTimer] = useState<ReturnType<typeof setTimeout> | null>(null);
+  const [year, setYear] = useState('Current');
+  const [fishingPressure, setFishingPressure] = useState(0.0);
+  const [pollutionLevel, setPollutionLevel] = useState(0.0);
 
   const exampleSpecies = [
     { name: 'Aurelia aurita', emoji: '🐙', type: 'Jellyfish' },
@@ -220,11 +233,20 @@ export default function SpeciesPanel() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          species_temp_str: data.temperature_preference,
+          species_temp_str: data?.temperature_preference || "10-25",
           lat: targetPoint.lat,
           lng: targetPoint.lng,
-          temp_offset: offsetToSend
+
+          year: year,
+          temp_offset: offsetToSend,
+          fishing_pressure: fishingPressure,
+          pollution_level: pollutionLevel,
+
+          ph_offset: 0.0,
+          oxygen_offset: 0.0
         })
+
+
       });
 
       if (!res.ok) {
@@ -233,8 +255,40 @@ export default function SpeciesPanel() {
 
       const result = await res.json();
       console.log('📥 Received suitability result:', result);
-      setSuitability(result);
-      setIsSimulationMode(offsetToSend !== 0);
+
+      // ✅ Ensure all required fields exist with proper fallbacks
+      const validatedResult: SuitabilityResult = {
+        status: result.status || 'error',
+        score: (result.score?.toUpperCase() || 'LOW') as 'HIGH' | 'MEDIUM' | 'LOW',
+        env: {
+          live_temp: result.env?.live_temp ?? 0,
+          sim_temp: result.env?.sim_temp ?? 0,
+          sim_ph: result.env?.sim_ph ?? 8.1,
+          sim_oxy: result.env?.sim_oxy ?? 100,
+          sim_fish: result.env?.sim_fish ?? 'Unknown',
+          sim_poll: result.env?.sim_poll ?? 'Unknown',
+          year: result.env?.year ?? year,
+          bio_range: result.env?.bio_range ?? '',
+          season: result.env?.season ?? ''
+        },
+        prediction: {
+          survival_chance: result.prediction?.survival_chance ?? 'Unknown',
+          population_trend: result.prediction?.population_trend ?? 'Unknown',
+          key_risk: result.prediction?.key_risk ?? 'Unknown',
+          explanation: result.prediction?.explanation ?? 'No analysis available'
+        },
+        // ✅ Include new fields
+        reason: result.reason || result.prediction?.explanation || '',
+        climate_impacts: result.climate_impacts || [],
+        live_waves: result.live_waves ?? result.env?.live_waves ?? 0,
+        live_wind: result.live_wind ?? result.env?.live_wind ?? 0,
+        season: result.season ?? result.env?.season,
+        bio_range: result.bio_range ?? result.env?.bio_range,
+        error: result.error
+      };
+
+      setSuitability(validatedResult);
+      setIsSimulationMode(offsetToSend !== 0 || year !== 'Current');
 
     } catch (error: any) {
       console.error("Suitability analysis failed", error);
@@ -242,11 +296,11 @@ export default function SpeciesPanel() {
         message: error.message || 'Habitat analysis failed. Please try again.',
         status: 500
       });
+      setSuitability(null);
     } finally {
       setAnalyzing(false);
     }
   };
-
   const handleSliderChange = (value: number) => {
     setSimOffset(value);
 
@@ -485,8 +539,8 @@ export default function SpeciesPanel() {
                     type="button"
                     onClick={() => handleQuickSearch(species.name)}
                     className={`text-xs px-3 py-1.5 rounded-full border transition-all flex items-center gap-1.5 ${activeSuggestion === species.name
-                        ? 'bg-blue-500/20 text-blue-300 border-blue-500/50 scale-105'
-                        : 'text-slate-400 hover:text-blue-300 bg-slate-800/50 hover:bg-slate-800 border-slate-700'
+                      ? 'bg-blue-500/20 text-blue-300 border-blue-500/50 scale-105'
+                      : 'text-slate-400 hover:text-blue-300 bg-slate-800/50 hover:bg-slate-800 border-slate-700'
                       }`}
                   >
                     <span>{species.emoji}</span>
@@ -556,8 +610,8 @@ export default function SpeciesPanel() {
                 <button
                   onClick={() => setViewMode('3D')}
                   className={`flex items-center gap-2 px-3 py-2 rounded-md transition-all ${viewMode === '3D'
-                      ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-md'
-                      : 'text-slate-400 hover:text-white hover:bg-white/5'
+                    ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-white hover:bg-white/5'
                     }`}
                 >
                   <Box size={16} />
@@ -567,10 +621,10 @@ export default function SpeciesPanel() {
                   disabled={mapPoints.length === 0}
                   onClick={() => mapPoints.length > 0 && setViewMode('MAP')}
                   className={`flex items-center gap-2 px-3 py-2 rounded-md transition-all ${mapPoints.length === 0
-                      ? 'opacity-40 cursor-not-allowed'
-                      : viewMode === 'MAP'
-                        ? 'bg-gradient-to-r from-teal-600 to-emerald-600 text-white shadow-md'
-                        : 'text-slate-400 hover:text-white hover:bg-white/5'
+                    ? 'opacity-40 cursor-not-allowed'
+                    : viewMode === 'MAP'
+                      ? 'bg-gradient-to-r from-teal-600 to-emerald-600 text-white shadow-md'
+                      : 'text-slate-400 hover:text-white hover:bg-white/5'
                     }`}
                 >
                   <MapIcon size={16} />
@@ -636,8 +690,8 @@ export default function SpeciesPanel() {
                           key={range}
                           onClick={() => setTimeRange(range)}
                           className={`px-2 py-1 text-xs rounded border pointer-events-auto transition-all ${timeRange === range
-                              ? 'bg-blue-500/20 text-blue-300 border-blue-500/50'
-                              : 'bg-black/60 text-slate-400 border-slate-700 hover:border-slate-600'
+                            ? 'bg-blue-500/20 text-blue-300 border-blue-500/50'
+                            : 'bg-black/60 text-slate-400 border-slate-700 hover:border-slate-600'
                             }`}
                         >
                           {range.charAt(0).toUpperCase() + range.slice(1)}
@@ -653,167 +707,137 @@ export default function SpeciesPanel() {
 
                     {/* RESULT CARD WITH SIMULATION */}
                     {suitability && (
-                      <div className="bg-slate-900/90 backdrop-blur-md border border-white/20 p-4 rounded-xl w-full lg:w-72 shadow-2xl mb-2 animate-in slide-in-from-bottom-5">
-                        <div className="flex justify-between items-start mb-3">
-                          <div className="flex items-center gap-2">
-                            <div className={`p-2 rounded-lg ${getScoreColor(suitability.score)}`}>
-                              <span className="text-lg">{getScoreEmoji(suitability.score)}</span>
-                            </div>
-                            <div>
-                              <h4 className="text-xs font-bold text-gray-300 uppercase tracking-widest">
-                                {isSimulationMode ? '⚠️ Climate Simulation' : 'Habitat Suitability'}
-                              </h4>
-                              <div className="text-xs text-slate-500">
-                                {isSimulationMode
-                                  ? `Projected +${simOffset}°C warming`
-                                  : `Live analysis • ${suitability.season || 'Current'}`}
-                              </div>
-                            </div>
+                      <div className="bg-slate-900/95 backdrop-blur-md border border-white/10 p-5 rounded-2xl w-full lg:w-96 shadow-2xl mb-2 animate-in slide-in-from-bottom-5 overflow-hidden">
+
+                        {/* 1. HEADER: Time Machine */}
+                        <div className="flex justify-between items-center mb-4 border-b border-white/10 pb-3">
+                          <div className="flex gap-1 bg-slate-800 p-1 rounded-lg">
+                            {['Current', '2030', '2050', '2100'].map((yr) => (
+                              <button
+                                key={yr}
+                                onClick={() => {
+                                  setYear(yr);
+                                  setTimeout(() => handleAnalyzeHabitat(simOffset), 50);
+                                }}
+                                className={`px-2 py-1 text-[10px] font-bold rounded-md transition-all ${(suitability.env?.year || year) === yr
+                                    ? 'bg-blue-600 text-white shadow-lg'
+                                    : 'text-slate-400 hover:text-white hover:bg-white/10'
+                                  }`}
+                              >
+                                {yr}
+                              </button>
+                            ))}
                           </div>
-                          <button
-                            onClick={() => {
-                              setSuitability(null);
-                              setSimOffset(0);
-                              setIsSimulationMode(false);
-                            }}
-                            className="text-gray-500 hover:text-white transition-colors p-1 hover:bg-white/10 rounded"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
+                          <button onClick={() => setSuitability(null)} className="text-slate-500 hover:text-white"><X className="w-4 h-4" /></button>
                         </div>
 
-                        <div className="flex items-center gap-3 mb-3">
-                          <div className={`text-3xl ${getScoreColor(suitability.score).split(' ')[2]}`}>
-                            {suitability.score === 'HIGH' ? '✅' :
-                              suitability.score === 'MEDIUM' ? '⚠️' :
-                                '⛔'}
+                        {/* 2. PREDICTION SCORE */}
+                        <div className="flex items-center gap-4 mb-5">
+                          <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-3xl shadow-inner border ${suitability.prediction?.survival_chance === 'High' ? 'bg-green-500/20 border-green-500/50' :
+                              suitability.prediction?.survival_chance === 'Moderate' ? 'bg-yellow-500/20 border-yellow-500/50' :
+                                'bg-red-500/20 border-red-500/50'
+                            }`}>
+                            {suitability.prediction?.survival_chance === 'High' ? '🛡️' :
+                              suitability.prediction?.survival_chance === 'Moderate' ? '⚠️' : '💀'}
                           </div>
-                          <div className="flex-1">
-                            <div className={`text-lg font-bold ${getScoreColor(suitability.score).split(' ')[2]}`}>
-                              {suitability.score} MATCH
+                          <div>
+                            <div className="text-[10px] text-slate-400 uppercase tracking-wider font-bold mb-0.5">Survival Probability</div>
+                            <div className="text-2xl font-bold text-white leading-none">
+                              {suitability.prediction?.survival_chance || 'Unknown'}
                             </div>
-                            <div className="text-xs text-gray-400 flex items-center gap-2">
-                              <span className="flex items-center gap-1">
-                                <Thermometer className="w-3 h-3" />
-                                {isSimulationMode ? '🌡️ Projected SST:' : '🌡️ Live SST:'}
-                                <span className="font-bold text-white ml-1">
-                                  {(suitability.simulated_temp ?? suitability.live_temp)?.toFixed(1) ?? '--'}°C
-                                </span>
-                                {isSimulationMode && (
-                                  <span className="text-red-300 ml-1 text-[10px]">
-                                    (+{simOffset}°C)
-                                  </span>
-                                )}
-                              </span>
-                            </div>
-                            {suitability.bio_range && (
-                              <div className="text-xs text-gray-400 mt-1 flex items-center gap-1">
-                                <span>🎯 Range: {suitability.bio_range}</span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* CLIMATE SLIDER */}
-                        <div className="mb-4 mt-3 pt-3 border-t border-white/10">
-                          <div className="flex items-center justify-between mb-2">
-                            <div className="flex items-center gap-1">
-                              <ThermometerSun className="w-3 h-3 text-amber-400" />
-                              <span className="text-xs font-medium text-slate-400">Climate Simulation</span>
-                            </div>
-                            <span className="text-xs font-bold text-amber-300">
-                              {simOffset === 0 ? 'Live' : `+${simOffset}°C`}
-                            </span>
-                          </div>
-                          <div className="relative">
-                            <div className="flex justify-between text-[10px] text-slate-500 mb-1">
-                              <span>Current</span>
-                              <span>+5°C Warming</span>
-                            </div>
-                            <input
-                              type="range"
-                              min="0"
-                              max="5"
-                              step="0.5"
-                              value={simOffset}
-                              onChange={(e) => {
-                                const value = parseFloat(e.target.value);
-                                handleSliderChange(value);
-                              }}
-                              disabled={analyzing}
-                              className="w-full h-2 bg-gradient-to-r from-blue-500/20 via-amber-500/30 to-red-500/30 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-amber-400 [&::-webkit-slider-thumb]:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
-                            />
-                            <div className="flex justify-between text-[8px] text-slate-600 mt-1">
-                              {[0, 1, 2, 3, 4, 5].map((mark) => (
-                                <span key={mark} className={`${mark === 0 ? 'text-blue-400' : mark <= 2 ? 'text-amber-400' : 'text-red-400'}`}>
-                                  +{mark}°
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                          <div className="text-[10px] text-slate-500 mt-2 italic">
-                            {simOffset === 0
-                              ? 'Live conditions analysis'
-                              : simOffset <= 2
-                                ? 'Moderate warming scenario (RCP 4.5)'
-                                : 'High warming scenario (RCP 8.5)'}
-                          </div>
-                        </div>
-
-                        {/* Environmental Factors */}
-                        <div className="grid grid-cols-3 gap-2 mb-3">
-                          <div className="text-center p-2 bg-slate-800/30 rounded border border-slate-700/30">
-                            <div className="text-[10px] text-slate-400 mb-1 flex items-center justify-center gap-1">
-                              <Wind className="w-3 h-3" />
-                              Wind
-                            </div>
-                            <div className="text-xs font-bold text-blue-200">
-                              {suitability.live_wind?.toFixed(1) ?? '--'} kph
-                            </div>
-                          </div>
-                          <div className="text-center p-2 bg-slate-800/30 rounded border border-slate-700/30">
-                            <div className="text-[10px] text-slate-400 mb-1 flex items-center justify-center gap-1">
-                              <Waves className="w-3 h-3" />
-                              Waves
-                            </div>
-                            <div className="text-xs font-bold text-cyan-200">
-                              {suitability.live_waves?.toFixed(1) ?? '--'} m
-                            </div>
-                          </div>
-                          <div className="text-center p-2 bg-slate-800/30 rounded border border-slate-700/30">
-                            <div className="text-[10px] text-slate-400 mb-1 flex items-center justify-center gap-1">
-                              <Cloud className="w-3 h-3" />
-                              Season
-                            </div>
-                            <div className="text-xs font-bold text-green-200">
-                              {suitability.season || '--'}
+                            <div className="text-xs text-slate-400 mt-1 flex gap-2">
+                              <span>Trend: <span className={suitability.prediction?.population_trend === 'Collapsing' ? 'text-red-400' : 'text-white'}>
+                                {suitability.prediction?.population_trend}
+                              </span></span>
                             </div>
                           </div>
                         </div>
 
-                        {/* Reason/Explanation */}
-                        <p className="text-sm text-slate-300 leading-tight border-t border-white/10 pt-3 mt-3">
-                          {suitability.reason}
-                        </p>
-
-                        {/* Climate Impacts */}
-                        {isSimulationMode && suitability.climate_impacts && (
-                          <div className="mt-3 pt-3 border-t border-white/10">
-                            <div className="text-xs text-amber-400 mb-1 font-medium">
-                              Projected Climate Impacts:
+                        {/* 3. COMPARISON VIEW (Live vs Future) */}
+                        <div className="grid grid-cols-2 gap-4 mb-5 bg-slate-800/30 p-3 rounded-xl border border-white/5">
+                          <div>
+                            <h5 className="text-[10px] text-slate-500 uppercase mb-2">Current</h5>
+                            <div className="space-y-1">
+                              <div className="flex justify-between text-xs"><span className="text-slate-400">Temp</span> <span>{suitability.env?.live_temp ?? 'N/A'}°C</span></div>
+                              <div className="flex justify-between text-xs"><span className="text-slate-400">pH</span> <span>8.10</span></div>
                             </div>
-                            <ul className="text-xs text-slate-400 space-y-1">
-                              {suitability.climate_impacts.map((impact, index) => (
-                                <li key={index} className="flex items-start gap-1">
-                                  <span className="text-amber-400 mt-0.5">•</span>
-                                  <span>{impact}</span>
+                          </div>
+                          <div className="border-l border-white/10 pl-4">
+                            <h5 className="text-[10px] text-amber-500 uppercase mb-2">Future ({suitability.env?.year})</h5>
+                            <div className="space-y-1">
+                              <div className="flex justify-between text-xs font-bold text-white"><span className="text-slate-400 font-normal">Temp</span> <span>{suitability.env?.sim_temp ?? 'N/A'}°C</span></div>
+                              <div className="flex justify-between text-xs font-bold text-white"><span className="text-slate-400 font-normal">pH</span> <span>{suitability.env?.sim_ph}</span></div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* 4. SPECIFIC IMPACTS LIST (The part you wanted) */}
+                        {suitability.climate_impacts && suitability.climate_impacts.length > 0 && (
+                          <div className="mb-4 bg-red-900/10 border border-red-500/20 p-3 rounded-lg">
+                            <div className="text-[10px] font-bold text-red-400 uppercase mb-2">Critical Stressors</div>
+                            <ul className="space-y-1">
+                              {suitability.climate_impacts.map((impact: string, index: number) => (
+                                <li key={index} className="text-xs text-red-200 flex items-start gap-2">
+                                  <span className="mt-0.5 text-red-500">•</span>
+                                  {impact}
                                 </li>
                               ))}
                             </ul>
                           </div>
                         )}
+
+                        {/* 5. CONTROLS (Fishing/Pollution) */}
+                        <div className="mb-4 space-y-3 border-t border-white/10 pt-3">
+                          <div className="text-[10px] font-bold text-slate-400 uppercase flex justify-between">
+                            <span>Human Stressors</span>
+                            <span className="text-xs text-slate-600 font-normal">Manual Adjustment</span>
+                          </div>
+
+                          {/* Fishing Slider */}
+                          <div>
+                            <div className="flex justify-between text-[10px] text-slate-500 mb-1">
+                              <span>Fishing Pressure</span>
+                              <span className="text-white">{Math.round(fishingPressure * 100)}%</span>
+                            </div>
+                            <input
+                              type="range" min="0" max="1" step="0.1"
+                              value={fishingPressure}
+                              onChange={(e) => setFishingPressure(parseFloat(e.target.value))}
+                              onMouseUp={() => handleAnalyzeHabitat(simOffset)}
+                              className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-red-500"
+                            />
+                          </div>
+
+                          {/* Pollution Slider */}
+                          <div>
+                            <div className="flex justify-between text-[10px] text-slate-500 mb-1">
+                              <span>Pollution / Traffic</span>
+                              <span className="text-white">{Math.round(pollutionLevel * 100)}%</span>
+                            </div>
+                            <input
+                              type="range" min="0" max="1" step="0.1"
+                              value={pollutionLevel}
+                              onChange={(e) => setPollutionLevel(parseFloat(e.target.value))}
+                              onMouseUp={() => handleAnalyzeHabitat(simOffset)}
+                              className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                            />
+                          </div>
+                        </div>
+
+                        {/* 6. AI EXPLANATION */}
+                        <div className="bg-blue-900/20 border border-blue-500/20 p-3 rounded-lg">
+                          <div className="flex items-center gap-2 mb-1">
+                            <Activity className="w-3 h-3 text-blue-400" />
+                            <span className="text-[10px] font-bold text-blue-300 uppercase">Analysis</span>
+                          </div>
+                          <p className="text-xs text-slate-300 leading-relaxed">
+                            {suitability.prediction?.explanation}
+                          </p>
+                        </div>
+
                       </div>
                     )}
+
 
                     {/* ANALYZE BUTTON */}
                     <div className="flex gap-2 w-full lg:w-auto justify-end">
@@ -987,7 +1011,6 @@ export default function SpeciesPanel() {
                 {data.detailed_explanation}
               </ReactMarkdown>
             </div>
-
             {isSimulationMode && suitability?.climate_impacts && (
               <div className="mt-8 p-5 bg-gradient-to-r from-amber-900/10 via-orange-900/5 to-amber-900/5 border border-amber-700/30 rounded-xl">
                 <div className="flex items-start gap-4">
@@ -1004,7 +1027,7 @@ export default function SpeciesPanel() {
                       and ecological impacts based on IPCC climate scenarios.
                     </p>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                      {suitability.climate_impacts?.map((impact, index) => (
+                      {suitability.climate_impacts.map((impact: string, index: number) => (
                         <div key={index} className="text-xs text-amber-600 flex items-start gap-2 bg-amber-900/10 p-2 rounded">
                           <span className="text-amber-500 mt-0.5">•</span>
                           <span>{impact}</span>
@@ -1015,6 +1038,8 @@ export default function SpeciesPanel() {
                 </div>
               </div>
             )}
+
+
 
             <div className="mt-8 p-5 bg-gradient-to-r from-yellow-900/10 via-amber-900/5 to-yellow-900/5 border border-yellow-700/30 rounded-xl">
               <div className="flex items-start gap-4">
@@ -1150,6 +1175,11 @@ interface StatCardProps {
   value: string;
   color: 'blue' | 'cyan' | 'orange' | 'teal';
 }
+interface ApiError {
+  message: string;
+  status?: number;
+}
+
 
 function StatCard({ icon, title, value, color }: StatCardProps) {
   const colorClasses = {

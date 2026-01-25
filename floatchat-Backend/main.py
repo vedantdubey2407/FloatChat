@@ -144,12 +144,17 @@ class SpeciesMapResponse(BaseModel):
     count: int
     points: List[Dict[str, Any]]  # Changed to List for proper typing
     error: Optional[str] = None
-
 class SuitabilityQuery(BaseModel):
     species_temp_str: str = Field(..., description="Temperature range string")
     lat: float = Field(..., ge=-90, le=90, description="Latitude")
     lng: float = Field(..., ge=-180, le=180, description="Longitude")
-    temp_offset: float = Field(0.0, description="Simulation offset in Celsius")
+    # ✅ PHASE 7 NEW INPUTS
+    year: str = "Current"
+    temp_offset: float = 0.0
+    ph_offset: float = 0.0      # Ocean Acidification (e.g. -0.1)
+    oxygen_offset: float = 0.0  # Deoxygenation (e.g. -5%)
+    fishing_pressure: float = 0.0 # 0.0 to 1.0
+    pollution_level: float = 0.0  # 0.0 to 1.0
     
     @field_validator('species_temp_str')
     @classmethod
@@ -157,6 +162,7 @@ class SuitabilityQuery(BaseModel):
         if not v or len(v.strip()) < 3:
             raise ValueError('Temperature string must be provided')
         return v.strip()
+        
 
 class SpeciesInfoResponse(BaseModel):
     scientific_name: str
@@ -167,20 +173,25 @@ class SpeciesInfoResponse(BaseModel):
     educational_brief: str
     detailed_explanation: str
     error: Optional[str] = None
-
+# First, update the SuitabilityResponse model to include missing fields
 class SuitabilityResponse(BaseModel):
     status: str
     score: str
-    live_temp: float
-    simulated_temp: float
-    temp_offset: float
-    live_waves: float
-    live_wind: float
-    season: str
-    bio_range: str
-    reason: str
-    factors: Optional[Dict[str, Any]] = None
+
+    env: Dict[str, Any]
+    prediction: Dict[str, Any]
+
+    # ROOT FIELDS USED BY FRONTEND
+    reason: Optional[str] = None
+    climate_impacts: Optional[List[str]] = None
+
+    live_waves: Optional[float] = None
+    live_wind: Optional[float] = None
+    season: Optional[str] = None
+    bio_range: Optional[str] = None
+
     error: Optional[str] = None
+
 
 # Global Camera State (In-Memory)
 camera_state = {
@@ -258,55 +269,73 @@ def get_location_coordinates(query: str) -> Optional[Dict[str, float]]:
     return None
 async def get_live_marine_data(lat: float, lng: float) -> Dict[str, float]:
     """
-    Fetches REAL marine data from Open-Meteo with improved error handling.
+    Fetches REAL marine data. 
+    Robustness: If the exact point is on land, it performs a 'Spiral Search' 
+    of nearby coordinates (approx 10km offsets) to find the nearest water data.
     """
-    try:
-        url = "https://marine-api.open-meteo.com/v1/marine"
-        params = {
-            "latitude": lat,
-            "longitude": lng,
-            "current": "temperature_2m,wave_height,wind_wave_height,wind_speed_10m",
-            "timezone": "auto"
-        }
-        
-        async with httpx.AsyncClient(timeout=5.0) as http_client:
-            resp = await http_client.get(url, params=params)
-            resp.raise_for_status()
-            data = resp.json()
-            
-            if "current" in data:
-                # --- CHANGE START: Check for None values (Land coordinates) ---
-                temp = data["current"].get("temperature_2m")
-                
-                if temp is None:
-                    raise ValueError("Location is on land (API returned null)")
-                # --- CHANGE END ---
+    # Spiral search offsets: Original -> N/S/E/W -> Diagonals
+    # 0.1 degrees is roughly 11km
+    offsets = [
+        (0, 0), # 1. Exact Location
+        (0.1, 0), (-0.1, 0), (0, 0.1), (0, -0.1), # 2. Cardinals
+        (0.1, 0.1), (0.1, -0.1), (-0.1, 0.1), (-0.1, -0.1) # 3. Diagonals
+    ]
 
-                return {
-                    "temp": float(temp),
-                    "wave_height": float(data["current"].get("wave_height") or 0.0),
-                    "wind_wave": float(data["current"].get("wind_wave_height") or 0.0),
-                    "wind_speed": float(data["current"].get("wind_speed_10m") or 0.0)
-                }
-            else:
-                raise ValueError("No current data in response")
+    async with httpx.AsyncClient(timeout=3.0) as http_client:
+        for i, (lat_off, lng_off) in enumerate(offsets):
+            try:
+                check_lat = lat + lat_off
+                check_lng = lng + lng_off
                 
-    except httpx.TimeoutException:
-        print(f"⚠️ Weather API timeout for ({lat}, {lng})")
-    except Exception as e:
-        print(f"⚠️ Weather API Error: {e}")
+                # Validation to ensure we don't go out of bounds
+                if not (-90 <= check_lat <= 90) or not (-180 <= check_lng <= 180):
+                    continue
+
+                url = "https://marine-api.open-meteo.com/v1/marine"
+                params = {
+                    "latitude": check_lat,
+                    "longitude": check_lng,
+                    "current": "temperature_2m,wave_height,wind_wave_height,wind_speed_10m",
+                    "timezone": "auto"
+                }
+                
+                resp = await http_client.get(url, params=params)
+                
+                # Check for API-level errors (like 400 Bad Request)
+                if resp.status_code != 200:
+                    continue
+
+                data = resp.json()
+                
+                if "current" in data:
+                    temp = data["current"].get("temperature_2m")
+                    
+                    # ✅ SUCCESS: Found valid water data
+                    if temp is not None:
+                        # Log if we had to move from the original point
+                        if i > 0: 
+                            print(f"💧 Land detected at origin. Found water nearby at offset {i} ({check_lat:.2f}, {check_lng:.2f})")
+                        
+                        return {
+                            "temp": float(temp),
+                            "wave_height": float(data["current"].get("wave_height") or 0.0),
+                            "wind_wave": float(data["current"].get("wind_wave_height") or 0.0),
+                            "wind_speed": float(data["current"].get("wind_speed_10m") or 0.0)
+                        }
+            except Exception:
+                # Silently fail for this point and try the next one
+                continue
+
+    # ⚠️ FALLBACK: If all 9 points failed (Deep Inland)
+    print(f"⚠️ Could not find water near {lat}, {lng} (Deep Inland). Using simulation.")
     
-    # Fallback with realistic values based on latitude
-    if lat > 0:  # Northern hemisphere
-        base_temp = 20 - (abs(lat) / 3)
-    else:  # Southern hemisphere
-        base_temp = 15 - (abs(lat) / 4)
-    
+    # Fallback calculation based on latitude
+    base_temp = 20 - (abs(lat) / 3) if lat > 0 else 15 - (abs(lat) / 4)
     return {
-        "temp": max(-2, min(30, base_temp + random.uniform(-3, 3))),
-        "wave_height": 1.0 + random.uniform(-0.5, 0.5),
-        "wind_wave": 0.5 + random.uniform(-0.2, 0.2),
-        "wind_speed": 5.0 + random.uniform(-3, 3)
+        "temp": round(base_temp + random.uniform(-2, 2), 1),
+        "wave_height": 0.5,
+        "wind_wave": 0.2,
+        "wind_speed": 5.0
     }
 async def get_live_wave_data(lat: float, lng: float) -> Dict[str, float]:
     """
@@ -1038,75 +1067,257 @@ Examples:
             points=[],
             error=f"System error: {str(e)}"
         )
-
 @app.post("/analyze-suitability", response_model=SuitabilityResponse)
 async def analyze_suitability(data: SuitabilityQuery):
     try:
-        print(f"🌡️ Analyzing Env at {data.lat:.2f}, {data.lng:.2f} (Offset: +{data.temp_offset}°C)")
+        print(f"🔮 Predicting {data.year} scenario at {data.lat:.2f}, {data.lng:.2f}...")
 
-        # 1. Parse Limits
+        # --------------------------------------------------
+        # 1. Biological Limits
+        # --------------------------------------------------
         min_temp, max_temp, bio_range = parse_temp_range(data.species_temp_str)
 
-        # 2. Get LIVE Conditions (Phase 4)
+        # --------------------------------------------------
+        # 2. Live Conditions
+        # --------------------------------------------------
         marine_data = await get_live_marine_data(data.lat, data.lng)
-        live_temp = marine_data["temp"]
-        
-        # 3. Apply Simulation (Phase 5)
-        simulated_temp = live_temp + data.temp_offset
-        is_simulation = data.temp_offset > 0
 
-        # 4. Seasonality (Phase 4)
-        month = datetime.now().month
-        is_north = data.lat > 0
-        if month in [12, 1, 2]: season = "Winter (N)" if is_north else "Summer (S)"
-        elif month in [6, 7, 8]: season = "Summer (N)" if is_north else "Winter (S)"
-        else: season = "Transition"
+        # --------------------------------------------------
+        # 3. Time Machine Logic (IPCC Presets)
+        # --------------------------------------------------
+        sim_temp = marine_data["temp"] + data.temp_offset
+        sim_ph = 8.1 + data.ph_offset
+        sim_oxy = 100 + data.oxygen_offset
+        sim_fish = data.fishing_pressure
+        sim_poll = data.pollution_level
 
-        # 5. Score Calculation (on SIMULATED temp)
+        if data.year == "2030":
+            sim_temp += 0.5
+            sim_ph -= 0.05
+            sim_fish = max(sim_fish, 0.3)
+
+        elif data.year == "2050":
+            sim_temp += 1.5
+            sim_ph -= 0.15
+            sim_oxy -= 2.0
+            sim_fish = max(sim_fish, 0.5)
+
+        elif data.year == "2100":
+            sim_temp += 3.0
+            sim_ph -= 0.3
+            sim_oxy -= 5.0
+            sim_poll = max(sim_poll, 0.6)
+
+        # --------------------------------------------------
+        # 4. Thermal Score
+        # --------------------------------------------------
         score = "LOW"
-        if min_temp <= simulated_temp <= max_temp: score = "HIGH"
-        elif abs(simulated_temp - min_temp) < 4 or abs(simulated_temp - max_temp) < 4: score = "MEDIUM"
 
-        # 6. AI Insight
-        sim_context = f"SIMULATED FUTURE (+{data.temp_offset}°C)" if is_simulation else "LIVE CONDITIONS"
-        context_prompt = f"""
-        Act as Marine Ecologist. Analyze {sim_context}:
-        - Species Needs: {min_temp}-{max_temp}°C
-        - Water Temp: {simulated_temp:.1f}°C (Base: {live_temp:.1f})
-        - Waves: {marine_data['wave_height']}m, Wind: {marine_data['wind_speed']}kph
-        - Season: {season}
-        
-        TASK: Write ONE short sentence explaining the suitability score ({score}). 
-        If simulated, mention thermal impact.
-        """
+        if min_temp <= sim_temp <= max_temp:
+            score = "HIGH"
+        elif abs(sim_temp - min_temp) < 4 or abs(sim_temp - max_temp) < 4:
+            score = "MEDIUM"
+
+        # --------------------------------------------------
+        # 5. AI Prediction (STRICT JSON)
+        # --------------------------------------------------
+        fish_text = ["Low", "Moderate", "High", "Critical"][min(int(sim_fish * 3), 3)]
+        poll_text = ["Clean", "Low", "Moderate", "Severe"][min(int(sim_poll * 3), 3)]
+
+        system_prompt = f"""
+You are a Marine Scientist.
+
+Return ONLY raw JSON.
+NO markdown.
+NO commentary.
+NO backticks.
+NO explanation outside JSON.
+
+Schema:
+{{
+  "survival_chance": "High | Moderate | Low | Critical",
+  "population_trend": "Increasing | Stable | Declining | Collapsing",
+  "key_risk": "Thermal Stress | Acidification | Overfishing | Habitat Loss | Deoxygenation",
+  "explanation": "One short sentence describing the main threat."
+}}
+
+SCENARIO ({data.year}):
+Temperature: {sim_temp:.1f}°C (Base {marine_data['temp']:.1f})
+pH: {sim_ph:.2f}
+Oxygen: {sim_oxy:.0f}%
+Fishing: {fish_text}
+Pollution: {poll_text}
+"""
 
         ai_res = await client.chat.completions.create(
             model=MODEL_ANALYST,
-            messages=[{"role": "user", "content": context_prompt}],
-            temperature=0.3,
-            max_tokens=80
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": "Return JSON now."}
+            ],
+            temperature=0.0,
+            max_tokens=200
         )
-        reason = ai_res.choices[0].message.content.strip().replace('"', '')
 
+        raw_ai = ai_res.choices[0].message.content.strip()
+
+        print("🤖 RAW AI RESPONSE:")
+        print(raw_ai)
+
+        # --------------------------------------------------
+        # 6. Parse AI JSON
+        # --------------------------------------------------
+        pred_data = extract_clean_json(raw_ai)
+
+        if not pred_data or not isinstance(pred_data, dict):
+            print("❌ AI JSON PARSE FAILED — USING FALLBACK")
+
+            pred_data = {
+                "survival_chance": "Low",
+                "population_trend": "Declining",
+                "key_risk": "Thermal Stress",
+                "explanation": "Environmental conditions fall outside the species' preferred tolerance range."
+            }
+
+        pred_data.setdefault("survival_chance", "Unknown")
+        pred_data.setdefault("population_trend", "Unknown")
+        pred_data.setdefault("key_risk", "Unknown")
+        pred_data.setdefault("explanation", "No explanation provided")
+
+        # --------------------------------------------------
+        # 7. Climate Impacts
+        # --------------------------------------------------
+        climate_impacts: list[str] = []
+
+        if data.year != "Current":
+
+            if sim_temp > max_temp:
+                climate_impacts.append(
+                    f"Temperature exceeds optimal range by {sim_temp - max_temp:.1f}°C"
+                )
+
+            elif sim_temp < min_temp:
+                climate_impacts.append(
+                    f"Temperature below optimal range by {min_temp - sim_temp:.1f}°C"
+                )
+
+            if sim_ph < 7.9:
+                climate_impacts.append(
+                    f"Ocean acidification reducing pH to {sim_ph:.2f}"
+                )
+
+            if sim_oxy < 95:
+                climate_impacts.append(
+                    f"Oxygen depletion at {sim_oxy:.0f}% of baseline"
+                )
+
+            if sim_fish > 0.5:
+                climate_impacts.append(
+                    f"High fishing pressure ({fish_text}) threatening population"
+                )
+
+            if sim_poll > 0.5:
+                climate_impacts.append(
+                    f"Elevated pollution levels ({poll_text}) degrading habitat"
+                )
+
+        # --------------------------------------------------
+        # 8. Reason Summary
+        # --------------------------------------------------
+        reason = f"Species adapted to {bio_range}. Current temperature {marine_data['temp']:.1f}°C"
+
+        if sim_temp != marine_data["temp"]:
+            reason += f", projected {sim_temp:.1f}°C"
+
+        if pred_data.get("key_risk"):
+            reason += f". Primary risk: {pred_data['key_risk']}"
+
+        # --------------------------------------------------
+        # 9. Season Logic
+        # --------------------------------------------------
+        current_month = datetime.now().month
+
+        if data.lat >= 0:
+            season = (
+                "Winter" if current_month in [12, 1, 2]
+                else "Spring" if current_month in [3, 4, 5]
+                else "Summer" if current_month in [6, 7, 8]
+                else "Fall"
+            )
+        else:
+            season = (
+                "Summer" if current_month in [12, 1, 2]
+                else "Fall" if current_month in [3, 4, 5]
+                else "Winter" if current_month in [6, 7, 8]
+                else "Spring"
+            )
+
+        # --------------------------------------------------
+        # 10. Waves & Wind
+        # --------------------------------------------------
+        live_waves = round(marine_data.get("wave_height", 0.0), 1)
+        live_wind = round(marine_data.get("wind_speed", 0.0), 1)
+
+        # --------------------------------------------------
+        # 11. Final Response
+        # --------------------------------------------------
         return SuitabilityResponse(
             status="success",
-            score=score,
-            live_temp=round(live_temp, 1),
-            simulated_temp=round(simulated_temp, 1),
-            temp_offset=data.temp_offset,
-            live_waves=marine_data['wave_height'],
-            live_wind=marine_data['wind_speed'],
-            season=season,
-            bio_range=bio_range,
+            score=score.upper(),
+            env={
+                "live_temp": round(marine_data["temp"], 1),
+                "sim_temp": round(sim_temp, 1),
+                "sim_ph": round(sim_ph, 2),
+                "sim_oxy": round(sim_oxy, 1),
+                "sim_fish": fish_text,
+                "sim_poll": poll_text,
+                "year": data.year,
+                "bio_range": bio_range,
+                "season": season,
+                "live_waves": live_waves,
+                "live_wind": live_wind
+            },
+            prediction=pred_data,
             reason=reason,
-            factors={"waves": "High" if marine_data['wave_height'] > 2 else "Low"}
+            climate_impacts=climate_impacts or None,
+            live_waves=live_waves,
+            live_wind=live_wind,
+            season=season,
+            bio_range=bio_range
         )
 
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"❌ Error in analyze_suitability: {e}")
+        import traceback
+        traceback.print_exc()
+
         return SuitabilityResponse(
-            status="error", score="UNKNOWN", live_temp=0, simulated_temp=0, temp_offset=0,
-            live_waves=0, live_wind=0, season="N/A", bio_range="N/A", reason="System Error", error=str(e)
+            status="error",
+            score="LOW",
+            env={
+                "live_temp": 0.0,
+                "sim_temp": 0.0,
+                "sim_ph": 8.1,
+                "sim_oxy": 100.0,
+                "sim_fish": "Unknown",
+                "sim_poll": "Unknown",
+                "year": data.year,
+                "bio_range": "",
+                "season": ""
+            },
+            prediction={
+                "survival_chance": "Unknown",
+                "population_trend": "Unknown",
+                "key_risk": "Analysis Error",
+                "explanation": str(e)
+            },
+            reason=f"Error: {str(e)}",
+            climate_impacts=None,
+            live_waves=0.0,
+            live_wind=0.0,
+            season="Unknown",
+            bio_range="Unknown",
+            error=str(e)
         )
 
 # --------------------------------------------------
