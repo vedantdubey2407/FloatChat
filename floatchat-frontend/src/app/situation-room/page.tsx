@@ -12,7 +12,7 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 function SituationRoomContent() {
   const { entities, interactions, addEntity, updateEntityPosition, snapshot } = useNexus();
-  
+
   const [selectedTool, setSelectedTool] = useState<EntityType | 'SELECT'>('SELECT');
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
@@ -95,7 +95,7 @@ ${String(error)}
     <div className="w-full h-screen bg-gradient-to-br from-gray-950 via-black to-blue-950/30 flex overflow-hidden relative">
       {/* Subtle grid background */}
       <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:20px_20px] pointer-events-none" />
-      
+
       {/* Glowing orbs */}
       <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-cyan-500/5 rounded-full blur-3xl animate-pulse" />
       <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-blue-500/5 rounded-full blur-3xl" />
@@ -120,10 +120,10 @@ ${String(error)}
             </label>
             <div className="h-px flex-1 bg-gradient-to-r from-transparent via-cyan-500/50 to-transparent" />
           </div>
-          <ToolButton 
-            label="Select / Move" 
-            active={selectedTool === 'SELECT'} 
-            onClick={() => setSelectedTool('SELECT')} 
+          <ToolButton
+            label="Select / Move"
+            active={selectedTool === 'SELECT'}
+            onClick={() => setSelectedTool('SELECT')}
             icon="👆"
             description="Select and reposition entities"
           />
@@ -180,7 +180,7 @@ ${String(error)}
               </span>
             </div>
             <div className="h-1 w-full bg-gray-800 rounded-full mt-2 overflow-hidden">
-              <div 
+              <div
                 className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full transition-all duration-500"
                 style={{ width: `${Math.min(entities.length * 10, 100)}%` }}
               />
@@ -207,7 +207,7 @@ ${String(error)}
                 <span className="text-sm text-gray-300">System Status: <span className="text-green-400 font-bold">OPERATIONAL</span></span>
               </div>
             </div>
-            
+
             <div className="bg-black/60 backdrop-blur-md px-4 py-2 rounded-xl border border-white/10 shadow-2xl">
               <div className="text-sm">
                 <span className="text-gray-400">Risk Level: </span>
@@ -236,7 +236,7 @@ ${String(error)}
         </div>
 
         {/* Threat Feed */}
-        <div className="mb-6">
+        <div className="mb-6 flex-shrink-0">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-xs text-gray-400 uppercase tracking-wider font-bold">Active Threats</h3>
             <div className="flex items-center gap-2">
@@ -244,8 +244,8 @@ ${String(error)}
               <span className="text-xs text-gray-400">{interactions.length} alerts</span>
             </div>
           </div>
-          
-          <div className="bg-gradient-to-b from-black/40 to-gray-900/40 p-4 rounded-xl border border-white/5 h-48 overflow-y-auto space-y-2">
+
+          <div className="bg-gradient-to-b from-black/40 to-gray-900/40 p-4 rounded-xl border border-white/5 h-48 overflow-y-auto space-y-2 custom-scrollbar">
             {interactions.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-gray-500">
                 <div className="w-8 h-8 border-2 border-gray-600 rounded-full flex items-center justify-center mb-2">
@@ -256,14 +256,14 @@ ${String(error)}
               </div>
             ) : (
               interactions.map(i => (
-                <div 
-                  key={i.id} 
+                <div
+                  key={i.id}
                   className="p-3 rounded-lg bg-gradient-to-r from-red-900/20 to-transparent border-l-4 border-red-500 backdrop-blur-sm animate-fadeIn"
                 >
                   <div className="flex items-center gap-2 mb-1">
                     <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
                     <strong className="text-red-400 text-xs uppercase tracking-wider">{i.type}</strong>
-                    <span className="text-gray-500 text-[10px] ml-auto">{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                    <span className="text-gray-500 text-[10px] ml-auto">{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                   </div>
                   <p className="text-gray-300 text-xs">{i.description}</p>
                 </div>
@@ -276,11 +276,10 @@ ${String(error)}
         <button
           onClick={triggerAI}
           disabled={isAnalyzing}
-          className={`group relative w-full py-4 rounded-xl text-sm font-bold tracking-wider transition-all duration-300 overflow-hidden mb-6 ${
-            isAnalyzing
+          className={`group relative w-full py-4 rounded-xl text-sm font-bold tracking-wider transition-all duration-300 overflow-hidden mb-6 flex-shrink-0 ${isAnalyzing
               ? 'bg-gradient-to-r from-gray-800 to-gray-900 cursor-not-allowed'
               : 'bg-gradient-to-r from-cyan-600/20 to-blue-600/20 hover:from-cyan-600/30 hover:to-blue-600/30 active:scale-[0.98]'
-          }`}
+            }`}
         >
           <div className="absolute inset-0 bg-gradient-to-r from-cyan-500/10 to-blue-500/10 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
           <div className="relative flex items-center justify-center gap-3">
@@ -300,47 +299,47 @@ ${String(error)}
           </div>
         </button>
 
-        {/* AI Analysis Output */}
+        {/* AI Analysis Output - FIXED */}
         {aiAnalysis && (
-          <div className="flex-1 flex flex-col">
-            <div className="flex items-center justify-between mb-3">
+          <div className="flex-1 flex flex-col min-h-0">
+            <div className="flex items-center justify-between mb-3 flex-shrink-0">
               <h3 className="text-xs text-gray-400 uppercase tracking-wider font-bold">AI Analysis Report</h3>
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 bg-cyan-500 rounded-full animate-pulse" />
                 <span className="text-xs text-cyan-400">LIVE</span>
               </div>
             </div>
-            
-            <div className="flex-1 bg-gradient-to-b from-black/40 to-gray-900/40 p-5 rounded-xl border border-white/5 overflow-y-auto">
+
+            <div className="flex-1 bg-gradient-to-b from-black/40 to-gray-900/40 p-5 rounded-xl border border-white/5 overflow-y-auto min-h-0 custom-scrollbar">
               <div className="prose prose-invert prose-sm max-w-none space-y-3">
                 <ReactMarkdown
                   components={{
-                    h2: ({children}) => (
+                    h2: ({ children }) => (
                       <h2 className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-blue-300 uppercase tracking-wider text-sm border-b border-white/10 pb-2 mb-3">
                         {children}
                       </h2>
                     ),
-                    h3: ({children}) => (
+                    h3: ({ children }) => (
                       <h3 className="text-white uppercase text-xs mt-4 mb-2 tracking-wider">
                         {children}
                       </h3>
                     ),
-                    strong: ({children}) => (
+                    strong: ({ children }) => (
                       <strong className="bg-gradient-to-r from-cyan-900/30 to-blue-900/30 px-2 py-0.5 rounded">
                         {children}
                       </strong>
                     ),
-                    p: ({children}) => (
+                    p: ({ children }) => (
                       <p className="text-gray-300 text-sm leading-relaxed">
                         {children}
                       </p>
                     ),
-                    ul: ({children}) => (
+                    ul: ({ children }) => (
                       <ul className="space-y-2 pl-4 border-l border-white/10">
                         {children}
                       </ul>
                     ),
-                    li: ({children}) => (
+                    li: ({ children }) => (
                       <li className="text-gray-300 text-sm flex items-start gap-2">
                         <div className="w-1.5 h-1.5 bg-cyan-500 rounded-full mt-2 flex-shrink-0" />
                         {children}
@@ -355,6 +354,7 @@ ${String(error)}
           </div>
         )}
       </aside>
+
     </div>
   );
 }
@@ -388,29 +388,26 @@ function ToolButton({ label, active, onClick, icon, description, variant = 'defa
   return (
     <button
       onClick={onClick}
-      className={`group relative w-full p-3 rounded-xl border transition-all duration-300 text-left overflow-hidden ${
-        active
+      className={`group relative w-full p-3 rounded-xl border transition-all duration-300 text-left overflow-hidden ${active
           ? `bg-gradient-to-r ${variantStyles[variant]} scale-[1.02] shadow-lg shadow-current/10`
           : 'bg-gradient-to-r from-gray-800/50 to-gray-900/50 border-white/5 hover:border-white/10 hover:scale-[1.01]'
-      }`}
+        }`}
     >
       {active && (
         <div className="absolute inset-0 bg-gradient-to-r from-current/5 to-transparent animate-pulse" />
       )}
-      
+
       <div className="relative flex items-center gap-3">
-        <div className={`w-10 h-10 rounded-lg flex items-center justify-center text-xl backdrop-blur-sm ${
-          active 
-            ? 'bg-white/10' 
+        <div className={`w-10 h-10 rounded-lg flex items-center justify-center text-xl backdrop-blur-sm ${active
+            ? 'bg-white/10'
             : 'bg-black/30'
-        }`}>
+          }`}>
           {icon}
         </div>
         <div className="flex-1">
           <div className="flex items-center justify-between">
-            <span className={`font-bold text-sm ${
-              active ? 'text-white' : 'text-gray-300'
-            }`}>
+            <span className={`font-bold text-sm ${active ? 'text-white' : 'text-gray-300'
+              }`}>
               {label}
             </span>
             {active && (

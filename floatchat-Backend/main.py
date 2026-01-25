@@ -371,7 +371,6 @@ async def get_live_wave_data(lat: float, lng: float) -> Dict[str, float]:
 @app.get("/")
 async def root():
     return {"status": "Marine Knowledge Engine Online", "version": "4.2.0"}
-
 @app.post("/chat")
 async def chat_bot(data: ChatRequest):
     """
@@ -379,6 +378,7 @@ async def chat_bot(data: ChatRequest):
     1. Checks Mission Memory first.
     2. Handles "Plan Route" requests by guiding user to UI.
     3. Uses Nominatim for simple "Zoom to X" commands.
+    4. Answers marine knowledge questions directly.
     """
     try:
         user_text = data.message.lower()
@@ -402,19 +402,58 @@ async def chat_bot(data: ChatRequest):
             Mission Summary: {current_mission['summary']}
             """
 
-        # --- B. SYSTEM PROMPT (UPDATED) ---
+        # --- B. IMPROVED SYSTEM PROMPT ---
         system_prompt = f"""
-        You are FloatChat, an Ocean Mission Controller.
-        
-        {mission_context}
+You are FloatChat, an Ocean Mission Controller and Marine Knowledge Assistant.
 
-        INSTRUCTIONS:
-        1. If user asks about the current mission (destination/origin), use the data above.
-        2. If user asks to PLAN A ROUTE (e.g. "Route from A to B"), reply EXACTLY: "To plan a route, please click 'Enable Route Planner' (top right) and select two points on the globe."
-        3. If user wants to Zoom/Go to a SINGLE SPECIFIC PLACE (e.g. "Zoom to Paris"), return ONLY: [LOOKUP: Place Name]
-        4. Keep normal replies under 2 sentences.
-        5. If a location is mentioned from the active route, append: [COMMAND: {{"lat": X, "lng": Y, "zoom": Z}}]
-        """
+{mission_context}
+
+INSTRUCTIONS:
+
+1. **Mission Questions**: If user asks about current route/destination/origin, use the active mission data above.
+
+2. **Route Planning**: If user asks to PLAN A ROUTE between two places (e.g., "Route from Mumbai to Sydney"), reply: 
+   "To plan a route, please click 'Enable Route Planner' (top right) and select two points on the globe."
+
+3. **Navigation Commands**: ONLY use [LOOKUP: Place Name] when user explicitly requests navigation with words like:
+   - "Zoom to [place]"
+   - "Go to [place]"
+   - "Show me [place]"
+   - "Navigate to [place]"
+   - "Fly to [place]"
+   - "Take me to [place]"
+   
+   DO NOT use [LOOKUP:] for informational questions like:
+   - "Where do dolphins live?"
+   - "What is the temperature in Tokyo?"
+   - "Tell me about coral reefs"
+   - "Why are there dolphins there?"
+
+4. **General Knowledge**: Answer marine biology, oceanography, climate, and geography questions directly using your knowledge. Be concise (2-3 sentences).
+
+5. **Helpful Suggestions**: For location-based questions, you may optionally end with: "Would you like me to show you [place] on the map?"
+
+6. **Active Route Context**: When discussing a location from the active mission, append: [COMMAND: {{"lat": X, "lng": Y, "zoom": Z}}]
+
+EXAMPLES:
+User: "Where do dolphins live?"
+You: "Dolphins are found worldwide in tropical and temperate waters, with high concentrations near coral reefs, coastal areas, and river systems like the Amazon and Ganges. Would you like me to show you major dolphin habitats on the map?"
+
+User: "Zoom to Tokyo"
+You: [LOOKUP: Tokyo]
+
+User: "What's the weather in Mumbai?"
+You: "I don't have live weather data, but Mumbai typically experiences monsoon rains from June-September with temperatures around 25-35°C. Would you like to zoom to Mumbai?"
+
+User: "Show me the Great Barrier Reef"
+You: [LOOKUP: Great Barrier Reef]
+
+User: "Why are there so many fish in coral reefs?"
+You: "Coral reefs provide shelter, breeding grounds, and abundant food sources, creating a diverse ecosystem that supports 25% of marine species despite covering less than 1% of the ocean floor."
+
+User: "Has oxygen been declining in the Bay of Bengal?"
+You: "Yes, studies show oxygen levels in the Bay of Bengal have been declining due to warming waters, pollution, and nutrient runoff creating 'dead zones.' This affects marine life and fisheries."
+"""
 
         # --- C. AI CALL ---
         response = await client.chat.completions.create(
@@ -423,7 +462,7 @@ async def chat_bot(data: ChatRequest):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": data.message}
             ],
-            temperature=0.1
+            temperature=0.2
         )
 
         raw_reply = response.choices[0].message.content.strip()
@@ -453,8 +492,8 @@ async def chat_bot(data: ChatRequest):
 
         # 2. Check for Direct Commands (from Mission Context)
         elif "COMMAND:" in raw_reply:
-             match_cmd = re.search(r'\[COMMAND:\s*(\{.*?\})\]', raw_reply, re.DOTALL)
-             if match_cmd:
+            match_cmd = re.search(r'\[COMMAND:\s*(\{.*?\})\]', raw_reply, re.DOTALL)
+            if match_cmd:
                 json_str = match_cmd.group(1)
                 try:
                     command = json.loads(json_str)
@@ -650,12 +689,8 @@ async def explain_route_decision(data: RouteComparisonRequest):
                 "trade_off_summary": "Manual review required."
             }
         }
-
 @app.get("/ocean-data")
 async def get_real_data():
-    """
-    Get ocean data with real marine conditions.
-    """
     floats = []
     
     # 1. Define specific sample points to get REAL weather for
@@ -690,11 +725,11 @@ async def get_real_data():
             "TEMP": round(30 - (abs(lat) / 3) + random.uniform(-2, 2), 1),
             "PSU": round(random.uniform(33.0, 37.0), 1),
             "DOXY": round(150 + (abs(lat) * 2) + random.uniform(-20, 20), 0),
-            "WAVE_HEIGHT": 0.5, # Default for background
+            "WAVE_HEIGHT": 0.5,
             "WIND_WAVE": 0.2
         })
 
-    return floats
+    return {"data": floats}  # ✅ FIXED - Wrap in object
 
 @app.post("/analyze")
 async def analyze_storm(data: StormPayload):
