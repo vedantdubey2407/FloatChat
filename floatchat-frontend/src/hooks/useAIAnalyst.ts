@@ -36,13 +36,14 @@ export function useAIAnalyst(): UseAIAnalystReturn {
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
   const analyzeStorm = useCallback(async (data: StormPayload) => {
     setIsAnalyzing(true);
     setError(null);
     
     try {
-      const response = await fetch('http://localhost:8000/analyze', {
+      const response = await fetch(`${API_BASE_URL}/analyze`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

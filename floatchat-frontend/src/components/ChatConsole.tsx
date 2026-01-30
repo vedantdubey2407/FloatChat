@@ -28,6 +28,9 @@ export default function ChatConsole({ onCommand, plannerMode, onTogglePlanner }:
   const [isListening, setIsListening] = useState(false);
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
 
+  // ✅ FIX 3: Dynamic API URL (Uses Vercel Env Var or defaults to Localhost)
+  const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
   /* --- PDF GENERATOR --- */
   const generatePDF = () => {
     const doc = new jsPDF();
@@ -103,11 +106,16 @@ export default function ChatConsole({ onCommand, plannerMode, onTogglePlanner }:
 
     // 3. API Call
     try {
-      const res = await fetch('http://localhost:8000/chat', {
+      // ✅ UPDATED: Now uses the dynamic API_BASE_URL
+      const res = await fetch(`${API_BASE_URL}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: msgText }),
       });
+
+      if (!res.ok) {
+        throw new Error(`Server error: ${res.status}`);
+      }
 
       const data = await res.json();
       setChatHistory(prev => [...prev, { role: 'ai', text: data.reply }]);
@@ -116,7 +124,8 @@ export default function ChatConsole({ onCommand, plannerMode, onTogglePlanner }:
         onCommand(data.command);
       }
     } catch (error) {
-      setChatHistory(prev => [...prev, { role: 'ai', text: '❌ System Offline.' }]);
+      console.error("Chat Error:", error); // Helpful for debugging
+      setChatHistory(prev => [...prev, { role: 'ai', text: '❌ System Offline. Check connection.' }]);
     }
     setLoading(false);
   };

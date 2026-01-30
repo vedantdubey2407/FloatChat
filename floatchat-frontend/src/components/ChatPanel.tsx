@@ -27,6 +27,7 @@ export default function ChatConsole({ onCommand, plannerMode, onTogglePlanner }:
   const [loading, setLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
   /* --- PDF GENERATOR --- */
   const generatePDF = () => {
@@ -105,7 +106,7 @@ export default function ChatConsole({ onCommand, plannerMode, onTogglePlanner }:
 
     // 3. API Call
     try {
-      const res = await fetch('http://localhost:8000/chat', {
+      const res = await fetch(`${API_BASE_URL}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: msgText }),

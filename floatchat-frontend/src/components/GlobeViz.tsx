@@ -42,6 +42,7 @@ export default function GlobeViz({ flyTo, activeStorms = [] }: GlobeVizProps) {
   // 🚢 SIMULATION STATE
   const [shipPosition, setShipPosition] = useState<{ lat: number; lng: number } | null>(null);
   const [shipPath, setShipPath] = useState<{ lat: number; lng: number }[]>([]);
+  const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
   const animationRef = useRef<number | null>(null);
   const progressRef = useRef(0); 
 
@@ -74,7 +75,7 @@ export default function GlobeViz({ flyTo, activeStorms = [] }: GlobeVizProps) {
 
   /* --- LOGIC --- */
   useEffect(() => {
-    fetch('http://localhost:8000/ocean-data')
+    fetch(`${API_BASE_URL}/ocean-data`)
       .then(r => r.json())
       .then(response => {
         // ✅ CRITICAL FIX: Access response.data because backend returns { "data": [...] }
@@ -135,7 +136,7 @@ export default function GlobeViz({ flyTo, activeStorms = [] }: GlobeVizProps) {
     if (!selectedPoint) return;
     setAnalyzing(true);
     try {
-      const res = await fetch('http://localhost:8000/sentinel', {
+      const res = await fetch(`${API_BASE_URL}/sentinel`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ context: JSON.stringify(selectedPoint) })
       });
       const data = await res.json();
@@ -160,7 +161,7 @@ export default function GlobeViz({ flyTo, activeStorms = [] }: GlobeVizProps) {
         setCalculating(true);
         setActiveTab('SUMMARY');
         
-        fetch('http://localhost:8000/plan-route', {
+        fetch(`${API_BASE_URL}/plan-route`, {
             method: 'POST', 
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ start_lat: updated[0].lat, start_lng: updated[0].lng, end_lat: updated[1].lat, end_lng: updated[1].lng })
@@ -173,7 +174,7 @@ export default function GlobeViz({ flyTo, activeStorms = [] }: GlobeVizProps) {
             
             if (data.alternate_routes) {
                 setExplaining(true);
-                fetch('http://localhost:8000/explain-decision', {
+                fetch(`${API_BASE_URL}/explain-decision`, {
                     method: 'POST', headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ chosen_route: data.basic_info, alternate_routes: data.alternate_routes, vessel_speed: 20 })
                 }).then(r=>r.json()).then(d => {
